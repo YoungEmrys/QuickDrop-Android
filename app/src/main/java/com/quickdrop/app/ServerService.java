@@ -14,6 +14,9 @@ import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 
 import java.io.File;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import org.json.JSONObject;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -58,21 +61,46 @@ public class ServerService extends Service {
             PyObject module = py.getModule("quickdrop");
             module.callAttr("configure_folder", folder.getAbsolutePath());
             if (stopping) return;
-            PyObject info = module.callAttr("start_server");
+            // Use a JSON string across the Chaquopy boundary. This avoids null
+            // PyObject values from dict lookups and gives Java a stable contract.
+            PyObject result = module.callAttr("start_server_json");
+            if (result == null) throw new IllegalStateException("Python start_server_json() returned null.");
+            String payload = result.toJava(String.class);
+            if (payload == null || payload.trim().isEmpty())
+                throw new IllegalStateException("Python returned an empty server response.");
+            JSONObject info = new JSONObject(payload);
+            if (!info.optBoolean("running", false))
+                throw new IllegalStateException("Python returned a response but the server is not running.");
             if (stopping) { module.callAttr("stop_server"); return; }
-            String share = info.get("share_url").toString();
-            String admin = info.get("admin_url").toString();
+
+            String share = info.optString("share_url", "");
+            String admin = info.optString("admin_url", "");
+            String ip = info.optString("ip", "unknown address");
+            if (share.isEmpty() || admin.isEmpty())
+                throw new IllegalStateException("Server started but did not provide its sharing and control-panel URLs. Response: " + payload);
+
             SharedPreferences prefs = getSharedPreferences("quickdrop_settings", MODE_PRIVATE);
-            prefs.edit().putBoolean("server_running", true)
+            prefs.edit().putBoolean("server_running", true).remove("server_error")
                     .putString("share_url", share).putString("admin_url", admin)
                     .putString("folder_path", folder.getAbsolutePath()).apply();
-            updateNotification("Sharing is active · " + info.get("ip").toString());
+            updateNotification("Sharing is active · " + ip);
             sendBroadcast(new Intent("com.quickdrop.app.SERVER_STARTED"));
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            StringWriter trace = new StringWriter();
+            e.printStackTrace(new PrintWriter(trace));
             getSharedPreferences("quickdrop_settings", MODE_PRIVATE).edit()
-                    .putBoolean("server_running", false).putString("server_error", e.toString()).apply();
+                    .putBoolean("server_running", false)
+                    .remove("share_url").remove("admin_url")
+                    .putString("server_error", e.toString() + "\n\n" + trace).apply();
             updateNotification("Could not start · Open QuickDrop for details");
             sendBroadcast(new Intent("com.quickdrop.app.SERVER_FAILED"));
+            started = false;
+            try {
+                if (Python.isStarted()) Python.getInstance().getModule("quickdrop").callAttr("stop_server");
+            } catch (Throwable cleanupError) {
+                android.util.Log.e("QuickDrop", "Server cleanup after startup failure failed", cleanupError);
+            }
+            android.util.Log.e("QuickDrop", "Python server startup failed", e);
             stopSelf();
         }
     }

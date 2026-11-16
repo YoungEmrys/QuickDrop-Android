@@ -1104,7 +1104,7 @@ def make_server():
             return ThreadingHTTPServer(("0.0.0.0", port), Handler), port
         except OSError:
             continue
-    raise SystemExit("Could not find a free port. Close another app using ports 8080–8099 and try again.")
+    raise RuntimeError("Could not find a free port. Close another app using ports 8080–8099 and try again.")
 
 
 SERVER = None
@@ -1130,7 +1130,7 @@ def start_server():
 
 def server_info():
     if SERVER is None:
-        return {"running": False}
+        return {"running": False, "port": 0, "ip": "", "share_url": "", "admin_url": "", "folder": FOLDER}
     ip = local_ip()
     return {
         "running": True,
@@ -1140,6 +1140,16 @@ def server_info():
         "admin_url": f"http://127.0.0.1:{SERVER_PORT}/admin/",
         "folder": FOLDER,
     }
+
+
+def start_server_json():
+    """Chaquopy-safe API: always return a JSON string, never a Python dict."""
+    return json.dumps(start_server(), ensure_ascii=False)
+
+
+def server_info_json():
+    """Return server status as a JSON string for the Android Java layer."""
+    return json.dumps(server_info(), ensure_ascii=False)
 
 
 def stop_server():

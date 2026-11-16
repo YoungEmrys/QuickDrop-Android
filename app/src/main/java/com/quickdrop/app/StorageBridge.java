@@ -51,12 +51,9 @@ public final class StorageBridge {
         if (tree == null || !tree.canRead()) return 0;
         File target = new File(targetPath);
         if (!target.exists()) target.mkdirs();
-        File[] oldFiles = target.listFiles();
-        if (oldFiles != null) {
-            for (File old : oldFiles) {
-                if (old.isFile() && !old.getName().equals(".nomedia")) old.delete();
-            }
-        }
+        // Merge from the selected folder; never wipe the app-private working
+        // directory during startup. Existing files are preserved unless a
+        // selected-folder file with the same name is imported.
         int copied = 0;
         for (DocumentFile item : tree.listFiles()) {
             if (!item.isFile() || item.getName() == null || item.getName().startsWith(".")) continue;
