@@ -27,12 +27,12 @@ jobs:
           python-version: '3.13'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4.0.2
+        uses: android-actions/setup-android@v4
         with:
           packages: |
-            platform-tools
+            'platform-tools
             platforms;android-35
-            build-tools;35.0.0
+            build-tools;35.0.0'
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
