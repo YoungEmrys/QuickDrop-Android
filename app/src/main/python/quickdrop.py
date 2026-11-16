@@ -596,7 +596,7 @@ function toast(m){const t=el('div','toast',m);$('#toasts').appendChild(t);
  setTimeout(()=>{t.classList.remove('show');setTimeout(()=>t.remove(),300);},3000);}
 
 /* ---- uploads with progress ---- */
-const queue=[];let busy=false;
+const queue=[];let activeUploads=0;const MAX_PARALLEL_UPLOADS=3;
 function addProgress(name){
  const row=el('div','prog'),top=el('div','prow'),n=el('span','pn',name),p=el('span','pp','0%');
  top.append(n,p);const bar=el('div','bar'),fill=el('div','fill');bar.appendChild(fill);
@@ -607,13 +607,15 @@ function addProgress(name){
 }
 function enqueue(files){for(const f of files)queue.push({f,to:target.id,label:target.label});pump();}
 function pump(){
- if(busy||!queue.length)return;busy=true;
- const job=queue.shift(),f=job.f,row=addProgress(f.name+(job.to!=='host'?' \\u2192 '+job.label:'')),x=new XMLHttpRequest();
- x.open('POST','upload');x.setRequestHeader('X-Filename',encodeURIComponent(f.name));x.setRequestHeader('X-To',job.to);
- x.upload.onprogress=e=>{if(e.lengthComputable)row.set(e.loaded/e.total);};
- x.onload=()=>{if(x.status===200){row.done();toast(job.to==='host'?(ADMIN?'Added '+f.name:'Sent '+f.name):'Sent '+f.name+' to '+job.label);}else row.fail();busy=false;refresh();pump();};
- x.onerror=()=>{row.fail();busy=false;pump();};
- x.send(f);
+ while(activeUploads<MAX_PARALLEL_UPLOADS&&queue.length){
+  const job=queue.shift(),f=job.f,row=addProgress(f.name+(job.to!=='host'?' \\u2192 '+job.label:'')),x=new XMLHttpRequest();
+  activeUploads++;
+  x.open('POST','upload');x.setRequestHeader('X-Filename',encodeURIComponent(f.name));x.setRequestHeader('X-To',job.to);
+  x.upload.onprogress=e=>{if(e.lengthComputable)row.set(e.loaded/e.total);};
+  x.onload=()=>{if(x.status===200){row.done();toast(job.to==='host'?(ADMIN?'Added '+f.name:'Sent '+f.name):'Sent '+f.name+' to '+job.label);}else row.fail();activeUploads--;refresh();pump();};
+  x.onerror=()=>{row.fail();activeUploads--;pump();};
+  x.send(f);
+ }
 }
 const drop=$('#drop'),input=$('#f');
 drop.onclick=()=>input.click();
@@ -827,7 +829,7 @@ def render_page(admin):
 
 # ------------------------------------------------------------------- server
 
-CHUNK = 1 << 20  # 1 MB blocks for fast transfers
+CHUNK = 4 << 20  # 4 MB blocks: fewer Python read/write iterations on large transfers
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -837,8 +839,8 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         try:  # tune the connection for big transfers
             self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
-            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 << 20)
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 << 20)
         except OSError:
             pass
 
