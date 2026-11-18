@@ -524,6 +524,9 @@ h1{margin:0;font-size:1.45rem;letter-spacing:-.3px} .sub{opacity:.85;font-size:.
 .pill{background:rgba(255,255,255,.2);padding:7px 12px;border-radius:99px;font-size:.85rem;
 white-space:nowrap;display:flex;align-items:center;gap:7px}
 .pill i{width:9px;height:9px;border-radius:50%;background:#cbd5e1;display:inline-block}
+.head-actions{display:flex;flex-direction:column;align-items:flex-end;gap:9px}
+.head-actions .btn{background:#fff;color:#b91c1c;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+@media(max-width:420px){.hin{align-items:flex-start}.head-actions{max-width:58%}.head-actions .pill{font-size:.78rem;padding:6px 9px}.head-actions .btn{font-size:.82rem;padding:7px 12px}}
 .pill.on i{background:#4ade80;box-shadow:0 0 0 3px rgba(74,222,128,.35)}
 main{max-width:620px;margin:-8px auto 0;padding:14px 14px 50px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:18px;
@@ -785,8 +788,8 @@ PUBLIC_PAGE = HEAD + """
 <header><div class="hin"><div><h1>QuickDrop</h1><div class="sub">You are <b id="me">this device</b> &middot; <a href="#" id="rename" style="color:#fff">rename</a></div></div>
 <div class="pill on" id="pill"><i></i><span id="pt">Connected</span></div></div></header>
 <main>
-<section class="card" id="inboxcard" style="display:none"><div class="ch"><h2>Sent to you</h2><span class="hint">from other devices</span></div><ul id="inbox"></ul></section>
 <section class="card"><div class="ch"><h2>Send files</h2><span class="hint">to a device or the shared folder</span></div>__DROP__</section>
+<section class="card" id="inboxcard" style="display:none"><div class="ch"><h2>Sent to you</h2><span class="hint">from other devices</span></div><ul id="inbox"></ul></section>
 <section class="card"><div class="ch"><h2>Files on this phone</h2><span class="hint" id="fcount"></span></div>
 <ul id="files"></ul><div class="hint" style="margin-top:8px">Tap a file to download it.</div></section>
 <section class="card"><div class="ch"><h2>Speed test</h2><span class="hint">checks the connection</span></div>
@@ -796,7 +799,8 @@ PUBLIC_PAGE = HEAD + """
 
 ADMIN_PAGE = HEAD + """
 <header><div class="hin"><div><h1>QuickDrop</h1><div class="sub">Control panel &middot; this phone</div></div>
-<div class="pill" id="pill"><i></i><span id="pt">Waiting for a device</span></div></div></header>
+<div class="head-actions"><div class="pill" id="pill"><i></i><span id="pt">Waiting for a device</span></div>
+<button class="btn danger sm" id="stop">Stop sharing</button></div></div></header>
 <main>
 <section class="card"><div class="ch"><h2>Connect a device</h2><span class="hint">same Wi-Fi or hotspot</span></div>
 <div class="qrbox"><div class="qr">__QR__</div><div class="link">__URL__</div>
@@ -811,7 +815,6 @@ __DROP__<ul id="files" style="margin-top:10px"></ul>
 <div class="row"><button class="btn danger sm" id="clear">Delete all files</button></div></section>
 
 <section class="card"><div class="ch"><h2>Activity</h2></div><div id="log"></div></section>
-<div class="foot"><button class="btn danger" id="stop">Stop sharing</button></div>
 </main><div id="toasts"></div><script>__JS__</script></body></html>"""
 
 
