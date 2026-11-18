@@ -31,12 +31,13 @@ public class MainActivity extends Activity {
     private static final int PICK_FOLDER = 501;
     private static final int NOTIFICATION_PERMISSION = 502;
     private static final int FILE_PICKER = 503;
+    private static final int SHARE_PICKER = 504;
     private android.webkit.ValueCallback<Uri[]> fileCallback;
     private final Handler handler = new Handler();
     private SharedPreferences prefs;
     private LinearLayout root;
     private TextView status, folderLabel, shareLink, errorText;
-    private Button startStop, openPanel;
+    private Button startStop, openPanel, shareToApps;
     private CheckBox keepRunning;
     private WebView webView;
     private boolean panelVisible = false;
@@ -114,6 +115,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams panelLp = params(-1, dp(48)); panelLp.topMargin = dp(10);
         root.addView(openPanel, panelLp);
         openPanel.setOnClickListener(v -> openControlPanel());
+
+        shareToApps = button("Share files with other apps");
+        LinearLayout.LayoutParams shareAppsLp = params(-1, dp(48)); shareAppsLp.topMargin = dp(9);
+        root.addView(shareToApps, shareAppsLp);
+        shareToApps.setOnClickListener(v -> chooseFilesForExternalSharing());
 
         errorText = new TextView(this); errorText.setTextColor(0xFFB42318); errorText.setTextSize(12);
         LinearLayout.LayoutParams errLp = params(-1, -2); errLp.topMargin = dp(10);
@@ -203,6 +209,12 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        if (requestCode == SHARE_PICKER) {
+            if (resultCode == RESULT_OK && data != null) {
+                shareSelectedFiles(data);
+            }
+            return;
+        }
         if (requestCode == PICK_FOLDER && resultCode == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
             int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
@@ -210,6 +222,53 @@ public class MainActivity extends Activity {
             StorageBridge.setTreeUri(uri.toString());
             Toast.makeText(this, "Storage folder selected. Restart sharing to apply it.", Toast.LENGTH_LONG).show();
             refreshUi();
+        }
+    }
+
+    private void chooseFilesForExternalSharing() {
+        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        picker.addCategory(Intent.CATEGORY_OPENABLE);
+        picker.setType("*/*");
+        picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try {
+            startActivityForResult(picker, SHARE_PICKER);
+        } catch (Exception e) {
+            Toast.makeText(this, "No file picker is available.", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void shareSelectedFiles(Intent pickerResult) {
+        java.util.ArrayList<Uri> files = new java.util.ArrayList<>();
+        if (pickerResult.getClipData() != null) {
+            android.content.ClipData clip = pickerResult.getClipData();
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri uri = clip.getItemAt(i).getUri();
+                if (uri != null) files.add(uri);
+            }
+        } else if (pickerResult.getData() != null) {
+            files.add(pickerResult.getData());
+        }
+        if (files.isEmpty()) return;
+
+        try {
+            Intent send;
+            if (files.size() == 1) {
+                Uri uri = files.get(0);
+                String mime = getContentResolver().getType(uri);
+                send = new Intent(Intent.ACTION_SEND);
+                send.setType(mime == null ? "*/*" : mime);
+                send.putExtra(Intent.EXTRA_STREAM, uri);
+            } else {
+                send = new Intent(Intent.ACTION_SEND_MULTIPLE);
+                send.setType("*/*");
+                send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, files);
+            }
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent chooser = Intent.createChooser(send, "Share with");
+            startActivity(chooser);
+        } catch (Exception e) {
+            Toast.makeText(this, "Unable to open Android sharing options: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
