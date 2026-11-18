@@ -36,6 +36,29 @@ FOLDER = os.path.join(os.path.expanduser("~"), "QuickDrop")
 os.makedirs(FOLDER, exist_ok=True)
 DIRECT = os.path.join(FOLDER, ".direct")  # files sent from one device to another
 TRANSFERS = {}  # id -> info about a file waiting for its receiver
+ACTIVE_IO = {}  # live transfer counters, keyed by request id
+IO_SEQ = 0
+IO_TOTALS = {"up": 0, "down": 0}
+
+def io_begin(direction, name, size):
+    global IO_SEQ
+    with LOCK:
+        IO_SEQ += 1
+        key = str(IO_SEQ)
+        ACTIVE_IO[key] = {"direction": direction, "name": name, "size": max(0, size), "bytes": 0, "started": time.time()}
+        return key
+
+def io_add(key, amount):
+    with LOCK:
+        item = ACTIVE_IO.get(key)
+        if item:
+            item["bytes"] += amount
+            IO_TOTALS[item["direction"]] += amount
+
+def io_end(key):
+    with LOCK:
+        ACTIVE_IO.pop(key, None)
+
 TRANSFER_TTL = 2 * 3600  # unclaimed direct files are removed after 2 hours
 
 
@@ -234,6 +257,13 @@ def build_state(admin, ip=None):
             devices.sort(key=lambda d: (not d["online"], d["ago"]))
             state["devices"] = devices
             state["log"] = list(reversed(LOG))[:25]
+            active = list(ACTIVE_IO.values())
+            state["monitor"] = {
+                "uploads": sum(1 for x in active if x["direction"] == "up"),
+                "downloads": sum(1 for x in active if x["direction"] == "down"),
+                "upload_bytes": IO_TOTALS["up"], "download_bytes": IO_TOTALS["down"],
+                "active": [{"direction": x["direction"], "name": x["name"], "size": x["size"], "bytes": x["bytes"]} for x in active]
+            }
         else:
             state["me"] = {"name": lab.get(ip, "")}
             state["inbox"] = [
@@ -682,6 +712,19 @@ function renderDevices(ds){
  const n=now.size,p=$('#pill');p.className='pill'+(n?' on':'');
  $('#pt').textContent=n?(n+(n===1?' device':' devices')+' connected'):'Waiting for a device';
 }
+let monitorPrev=null, monitorPrevAt=0;
+function renderMonitor(m){
+ if(!m)return;
+ const now=performance.now();let up=0,down=0;
+ if(monitorPrev&&monitorPrevAt){const sec=(now-monitorPrevAt)/1000;up=Math.max(0,m.upload_bytes-monitorPrev.upload_bytes)/sec;down=Math.max(0,m.download_bytes-monitorPrev.download_bytes)/sec;}
+ monitorPrev={upload_bytes:m.upload_bytes,download_bytes:m.download_bytes};monitorPrevAt=now;
+ $('#mon-up').textContent=fmtRate(up);$('#mon-down').textContent=fmtRate(down);
+ $('#mon-count').textContent=m.uploads+' uploads · '+m.downloads+' downloads';
+ const box=$('#mon-active');box.replaceChildren();
+ if(!m.active.length){box.appendChild(el('div','empty','No active transfers.'));return;}
+ for(const t of m.active){const row=el('div','lg');row.append(el('span','',t.direction==='up'?'↑ Upload':'↓ Download'),el('span','',t.name+' · '+fmt(t.bytes)+' / '+fmt(t.size)));box.appendChild(row);}
+}
+function fmtRate(n){return n>=1048576?(n/1048576).toFixed(2)+' MB/s':(n/1024).toFixed(0)+' KB/s';}
 function renderLog(items){
  const box=$('#log');box.replaceChildren();
  if(!items.length){box.appendChild(el('div','empty','Nothing yet.'));return;}
@@ -726,7 +769,7 @@ function apply(s){
  const fj=JSON.stringify(s.files);
  if(fj!==lastFiles){lastFiles=fj;renderFiles(s.files);}
  $('#fcount').textContent=s.files.length+(s.files.length===1?' file':' files');
- if(ADMIN){renderDevices(s.devices);renderLog(s.log);}
+ if(ADMIN){renderDevices(s.devices);renderLog(s.log);renderMonitor(s.monitor);}
  else{$('#pill').className='pill on';$('#pt').textContent='Connected';
   $('#me').textContent=s.me.name||'this device';renderInbox(s.inbox);}
 }
@@ -814,6 +857,10 @@ ADMIN_PAGE = HEAD + """
 __DROP__<ul id="files" style="margin-top:10px"></ul>
 <div class="row"><button class="btn danger sm" id="clear">Delete all files</button></div></section>
 
+<section class="card" id="transfer-monitor"><div class="ch"><h2>Transfer Monitor</h2><span class="hint" id="mon-count">0 uploads · 0 downloads</span></div>
+<div class="dev"><div class="di"><div class="dn">Incoming speed</div><div class="dm">Devices uploading to this phone</div></div><strong id="mon-up">0 KB/s</strong></div>
+<div class="dev"><div class="di"><div class="dn">Outgoing speed</div><div class="dm">This phone sending downloads</div></div><strong id="mon-down">0 KB/s</strong></div>
+<div id="mon-active"></div></section>
 <section class="card"><div class="ch"><h2>Activity</h2></div><div id="log"></div></section>
 </main><div id="toasts"></div><script>__JS__</script></body></html>"""
 
@@ -897,7 +944,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return start, end, True
 
-    def _pump(self, f, offset, length):
+    def _pump(self, f, offset, length, monitor_key=None):
         sock, sent, fast = self.connection, 0, hasattr(os, "sendfile")
         while sent < length:
             want = min(4 * CHUNK, length - sent)
@@ -919,6 +966,7 @@ class Handler(BaseHTTPRequestHandler):
             if n == 0:
                 break
             sent += n
+            if monitor_key: io_add(monitor_key, n)
 
     def _serve_file(self, path, dev, name=None, what=None):
         size = os.path.getsize(path)
@@ -931,6 +979,7 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 dev["down"] += 1
                 log(f"{label_of(dev)} {what or 'downloaded ' + name}")
+        monitor_key = io_begin("down", name, end - start + 1)
         self.send_response(206 if partial else 200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(end - start + 1))
@@ -945,9 +994,11 @@ class Handler(BaseHTTPRequestHandler):
                     os.posix_fadvise(f.fileno(), 0, 0, os.POSIX_FADV_SEQUENTIAL)
                 except (AttributeError, OSError):
                     pass
-                self._pump(f, start, end - start + 1)
+                self._pump(f, start, end - start + 1, monitor_key)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
+        finally:
+            io_end(monitor_key)
 
     # ---- requests -------------------------------------------------------
     def do_GET(self):
@@ -1039,6 +1090,7 @@ class Handler(BaseHTTPRequestHandler):
             final = os.path.join(DIRECT, f"{tid}_{name}") if target else unique_path(name)
             temp = os.path.join(os.path.dirname(final), "." + os.path.basename(final) + ".part")
             ok = False
+            monitor_key = io_begin("up", name, remaining)
             try:
                 with open(temp, "wb") as out:
                     while remaining > 0:
@@ -1046,11 +1098,13 @@ class Handler(BaseHTTPRequestHandler):
                         if not chunk:
                             break
                         out.write(chunk)
+                        io_add(monitor_key, len(chunk))
                         remaining -= len(chunk)
                 ok = remaining == 0
                 if ok:
                     os.replace(temp, final)
             finally:
+                io_end(monitor_key)
                 if not ok and os.path.exists(temp):
                     os.remove(temp)
             if not ok:
