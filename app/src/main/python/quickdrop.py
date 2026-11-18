@@ -555,7 +555,17 @@ h1{margin:0;font-size:1.45rem;letter-spacing:-.3px} .sub{opacity:.85;font-size:.
 white-space:nowrap;display:flex;align-items:center;gap:7px}
 .pill i{width:9px;height:9px;border-radius:50%;background:#cbd5e1;display:inline-block}
 .head-actions{display:flex;flex-direction:column;align-items:flex-end;gap:9px}
-.head-actions .btn{background:#fff;color:#b91c1c;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+.head-actions .btn.danger{background:#ffcf33;color:#352400;border:1px solid #f5b800;box-shadow:0 2px 7px rgba(0,0,0,.22);font-weight:700}
+.head-actions .btn.danger:hover{background:#ffe27a}
+.admin-layout{max-width:1400px;margin:-8px auto 0;padding:14px 18px 50px;display:grid;grid-template-columns:minmax(0,1fr) minmax(290px,350px);gap:18px;align-items:start}
+.admin-left{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:stretch;justify-items:stretch}
+.admin-left>.card{margin:0;min-width:0}
+.admin-left>.card:nth-child(odd):last-child{grid-column:1/-1}
+.admin-right{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow-y:auto;overscroll-behavior:contain;padding-right:3px}
+.admin-right>.card{margin-bottom:14px}
+.admin-right::-webkit-scrollbar{width:6px}.admin-right::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+@media(max-width:900px){.admin-layout{display:block;max-width:680px;padding:14px 14px 50px}.admin-left{display:block}.admin-left>.card{margin-bottom:14px}.admin-left>.card:nth-child(odd):last-child{grid-column:auto}.admin-right{position:static;max-height:none;overflow:visible;padding:0}}
+@media(min-width:901px){.admin-layout{min-height:calc(100vh - 130px)}}
 @media(max-width:420px){.hin{align-items:flex-start}.head-actions{max-width:58%}.head-actions .pill{font-size:.78rem;padding:6px 9px}.head-actions .btn{font-size:.82rem;padding:7px 12px}}
 .pill.on i{background:#4ade80;box-shadow:0 0 0 3px rgba(74,222,128,.35)}
 main{max-width:620px;margin:-8px auto 0;padding:14px 14px 50px}
@@ -828,13 +838,13 @@ DROP = ('<div class="chips" id="targets"></div>'
         '<input id="f" type="file" multiple hidden><div id="progress"></div>')
 
 PUBLIC_PAGE = HEAD + """
-<header><div class="hin"><div><h1>QuickDrop</h1><div class="sub">You are <b id="me">this device</b> &middot; <a href="#" id="rename" style="color:#fff">rename</a></div></div>
+<header><div class="hin"><div><h1>QuickDrop</h1><div class="sub">You are <b id="me">this device</b> &middot; <a href="#" id="rename" style="color:#fff">Rename</a></div></div>
 <div class="pill on" id="pill"><i></i><span id="pt">Connected</span></div></div></header>
 <main>
 <section class="card"><div class="ch"><h2>Send files</h2><span class="hint">to a device or the shared folder</span></div>__DROP__</section>
-<section class="card" id="inboxcard" style="display:none"><div class="ch"><h2>Sent to you</h2><span class="hint">from other devices</span></div><ul id="inbox"></ul></section>
 <section class="card"><div class="ch"><h2>Files on this phone</h2><span class="hint" id="fcount"></span></div>
 <ul id="files"></ul><div class="hint" style="margin-top:8px">Tap a file to download it.</div></section>
+<section class="card" id="inboxcard" style="display:none"><div class="ch"><h2>Files on shared folder</h2><span class="hint">received from other devices · not yet downloaded</span></div><ul id="inbox"></ul></section>
 <section class="card"><div class="ch"><h2>Speed test</h2><span class="hint">checks the connection</span></div>
 <button class="btn ghost" id="speedbtn">Test speed</button>
 <div class="hint" id="speedout" style="margin-top:10px"></div></section>
@@ -844,25 +854,23 @@ ADMIN_PAGE = HEAD + """
 <header><div class="hin"><div><h1>QuickDrop</h1><div class="sub">Control panel &middot; this phone</div></div>
 <div class="head-actions"><div class="pill" id="pill"><i></i><span id="pt">Waiting for a device</span></div>
 <button class="btn danger sm" id="stop">Stop sharing</button></div></div></header>
-<main>
+<main class="admin-layout"><div class="admin-left">
 <section class="card"><div class="ch"><h2>Connect a device</h2><span class="hint">same Wi-Fi or hotspot</span></div>
 <div class="qrbox"><div class="qr">__QR__</div><div class="link">__URL__</div>
 <div class="row"><button class="btn ghost sm" id="copy">Copy link</button>
 <button class="btn ghost sm" id="share">Share link</button></div></div></section>
-
 <section class="card"><div class="ch"><h2>Connected devices</h2><span class="hint">&#11014; sent to you &middot; &#11015; downloaded</span></div>
 <div id="devices"></div></section>
-
 <section class="card"><div class="ch"><h2>Send &amp; share</h2><span class="hint" id="fcount"></span></div>
 __DROP__<ul id="files" style="margin-top:10px"></ul>
 <div class="row"><button class="btn danger sm" id="clear">Delete all files</button></div></section>
-
+</div><aside class="admin-right">
 <section class="card" id="transfer-monitor"><div class="ch"><h2>Transfer Monitor</h2><span class="hint" id="mon-count">0 uploads · 0 downloads</span></div>
 <div class="dev"><div class="di"><div class="dn">Incoming speed</div><div class="dm">Devices uploading to this phone</div></div><strong id="mon-up">0 KB/s</strong></div>
 <div class="dev"><div class="di"><div class="dn">Outgoing speed</div><div class="dm">This phone sending downloads</div></div><strong id="mon-down">0 KB/s</strong></div>
 <div id="mon-active"></div></section>
 <section class="card"><div class="ch"><h2>Activity</h2></div><div id="log"></div></section>
-</main><div id="toasts"></div><script>__JS__</script></body></html>"""
+</aside></main><div id="toasts"></div><script>__JS__</script></body></html>"""
 
 
 def render_page(admin):

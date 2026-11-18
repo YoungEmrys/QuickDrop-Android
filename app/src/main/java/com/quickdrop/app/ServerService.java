@@ -9,6 +9,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
+import android.net.wifi.WifiManager;
 
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
@@ -28,11 +30,31 @@ public class ServerService extends Service {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private volatile boolean started = false;
     private volatile boolean stopping = false;
+    private PowerManager.WakeLock cpuWakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     @Override public void onCreate() {
         super.onCreate();
         StorageBridge.initialize(this);
         createChannel();
+        // Keep the CPU and Wi-Fi radio awake while QuickDrop is actively serving transfers.
+        // Locks are released when the user stops sharing or Android destroys the service.
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            cpuWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "QuickDrop::TransferService");
+            cpuWakeLock.setReferenceCounted(false);
+            cpuWakeLock.acquire();
+        } catch (Throwable e) {
+            android.util.Log.w("QuickDrop", "Could not acquire CPU wake lock", e);
+        }
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "QuickDrop::WifiTransfer");
+            wifiLock.setReferenceCounted(false);
+            wifiLock.acquire();
+        } catch (Throwable e) {
+            android.util.Log.w("QuickDrop", "Could not acquire Wi-Fi lock", e);
+        }
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -120,6 +142,8 @@ public class ServerService extends Service {
             if (Python.isStarted()) Python.getInstance().getModule("quickdrop").callAttr("stop_server");
         } catch (Exception ignored) { }
         try { worker.shutdownNow(); } catch (Exception ignored) { }
+        try { if (cpuWakeLock != null && cpuWakeLock.isHeld()) cpuWakeLock.release(); } catch (Exception ignored) { }
+        try { if (wifiLock != null && wifiLock.isHeld()) wifiLock.release(); } catch (Exception ignored) { }
         stopForeground(STOP_FOREGROUND_REMOVE);
         sendBroadcast(new Intent("com.quickdrop.app.SERVER_STOPPED"));
         super.onDestroy();
