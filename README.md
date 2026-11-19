@@ -80,3 +80,14 @@ This stage adds Android Wi-Fi Direct discovery and pairing using `WifiP2pManager
 
 ### Current limitation
 This is the first Wi-Fi Direct transfer pass and currently supports transfer from the non-group-owner phone to the group-owner phone. Android chooses the group owner during connection negotiation; the app does not yet let users choose that role. Bidirectional transfer, richer transfer progress, cancellation, and integrity verification are planned follow-up work. If a phone does not support Wi-Fi Direct, the existing browser and Sharesheet methods remain available.
+
+
+## Stage 1.8 – Wi-Fi Direct send/receive interface
+
+- Replaced the single Wi-Fi Direct action with equal-width **Send** and **Receive** buttons.
+- Added a labelled nearby-device card: **Sending to nearby devices** or **Sharing to you**.
+- Nearby Android devices appear as selectable device rows inside the card.
+- The status reads **looking for devices** in Send mode and **receiving ready** in Receive mode while discovery is active.
+- Added a slow looping QuickDrop water-drop animation with a small ripple pulse. It stops when a peer is found, a connection is formed, or a file is received.
+- Wi-Fi Direct connection requests now use a group-owner preference based on the selected mode; Android still controls the final group-owner negotiation.
+

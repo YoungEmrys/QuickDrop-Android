@@ -51,8 +51,12 @@ public class MainActivity extends Activity {
     private View drawerScrim;
     private boolean drawerOpen = false;
     private TextView status, folderLabel, shareLink, errorText;
-    private Button startStop, openPanel, wifiDirectButton, menuButton;
-    private TextView wifiDirectStatus;
+    private Button startStop, openPanel, wifiSendButton, wifiReceiveButton, menuButton;
+    private TextView wifiCardTitle, wifiDirectStatus;
+    private LinearLayout wifiDeviceCard;
+    private LogoDropView logoAnimation;
+    private String wifiMode = "";
+    private boolean wifiPickerOpened = false;
     private WifiDirectController wifiDirect;
     private CheckBox keepRunning;
     private WebView webView;
@@ -64,13 +68,28 @@ public class MainActivity extends Activity {
         StorageBridge.initialize(this);
         buildUi();
         wifiDirect = new WifiDirectController(this, new WifiDirectController.Listener() {
-            @Override public void onStatus(String message) { wifiDirectStatus.setText(message); }
+            @Override public void onStatus(String message) {
+                if (wifiMode.isEmpty()) return;
+                if (message != null && (message.startsWith("Searching for nearby") || message.startsWith("No devices found yet"))) {
+                    wifiDirectStatus.setText(wifiMode.equals("receive") ? "receiving ready" : "looking for devices");
+                } else {
+                    wifiDirectStatus.setText(message);
+                }
+                if (message != null && (message.startsWith("Received ") || message.startsWith("Incoming Wi-Fi Direct transfer completed"))) logoAnimation.setAnimating(false);
+            }
             @Override public void onPeers(java.util.List<android.net.wifi.p2p.WifiP2pDevice> peers) { showWifiDirectPeers(peers); }
             @Override public void onConnected(boolean connected) {
-                boolean canSend = connected && wifiDirect.canSend();
-                wifiDirectButton.setText(!connected ? "Find nearby QuickDrop devices" : (canSend ? "Send files via Wi-Fi Direct" : "Connected · Ready to receive"));
-                wifiDirectButton.setEnabled(!connected || canSend);
-                wifiDirectButton.setAlpha(wifiDirectButton.isEnabled() ? 1f : 0.7f);
+                if (connected) {
+                    logoAnimation.setAnimating(false);
+                    wifiDirectStatus.setText(wifiMode.equals("receive") ? "Connected · receiving ready" : (wifiDirect.canSend() ? "Connected · Select files to send" : "Connected · This phone is ready to receive"));
+                    if (wifiMode.equals("send") && wifiDirect.canSend() && !wifiPickerOpened) {
+                        wifiPickerOpened = true;
+                        handler.postDelayed(() -> chooseFilesForWifiDirect(), 350);
+                    }
+                } else {
+                    wifiPickerOpened = false;
+                    if (!wifiMode.isEmpty()) logoAnimation.setAnimating(true);
+                }
             }
         });
         refreshUi();
@@ -127,13 +146,40 @@ public class MainActivity extends Activity {
 
         TextView wifiTitle = sectionTitle("Wi-Fi Direct (Android to Android)");
         LinearLayout.LayoutParams wifiTitleLp = params(-1, -2); wifiTitleLp.topMargin = dp(24); root.addView(wifiTitle, wifiTitleLp);
+        TextView wifiHint = new TextView(this);
+        wifiHint.setText("Send directly to another Android phone, or keep this phone ready to receive.");
+        wifiHint.setTextSize(13); wifiHint.setTextColor(0xFF526477);
+        LinearLayout.LayoutParams wifiHintLp = params(-1, -2); wifiHintLp.topMargin = dp(5); root.addView(wifiHint, wifiHintLp);
+
+        LinearLayout wifiActions = new LinearLayout(this);
+        wifiActions.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams actionsLp = params(-1, dp(50)); actionsLp.topMargin = dp(12); root.addView(wifiActions, actionsLp);
+        wifiSendButton = button("Send");
+        wifiReceiveButton = button("Receive");
+        LinearLayout.LayoutParams halfLeft = new LinearLayout.LayoutParams(0, -1, 1f); halfLeft.rightMargin = dp(5);
+        LinearLayout.LayoutParams halfRight = new LinearLayout.LayoutParams(0, -1, 1f); halfRight.leftMargin = dp(5);
+        wifiActions.addView(wifiSendButton, halfLeft); wifiActions.addView(wifiReceiveButton, halfRight);
+        wifiSendButton.setOnClickListener(v -> startWifiMode("send"));
+        wifiReceiveButton.setOnClickListener(v -> startWifiMode("receive"));
+
+        wifiCardTitle = sectionTitle("Choose Send or Receive");
+        LinearLayout.LayoutParams cardTitleLp = params(-1, -2); cardTitleLp.topMargin = dp(16); root.addView(wifiCardTitle, cardTitleLp);
+        wifiDeviceCard = new LinearLayout(this);
+        wifiDeviceCard.setOrientation(LinearLayout.VERTICAL);
+        wifiDeviceCard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        android.graphics.drawable.GradientDrawable cardBg = new android.graphics.drawable.GradientDrawable();
+        cardBg.setColor(0xFFFFFFFF); cardBg.setCornerRadius(dp(14)); cardBg.setStroke(dp(1), 0xFFE0E7EF);
+        wifiDeviceCard.setBackground(cardBg);
+        LinearLayout.LayoutParams deviceCardLp = params(-1, -2); deviceCardLp.topMargin = dp(7); root.addView(wifiDeviceCard, deviceCardLp);
         wifiDirectStatus = new TextView(this);
-        wifiDirectStatus.setText("Connect directly to another Android phone with QuickDrop installed. No hotspot or internet required.");
-        wifiDirectStatus.setTextSize(13); wifiDirectStatus.setTextColor(0xFF526477);
-        LinearLayout.LayoutParams wifiStatusLp = params(-1, -2); wifiStatusLp.topMargin = dp(6); root.addView(wifiDirectStatus, wifiStatusLp);
-        wifiDirectButton = button("Find nearby QuickDrop devices");
-        LinearLayout.LayoutParams wifiButtonLp = params(-1, dp(50)); wifiButtonLp.topMargin = dp(9); root.addView(wifiDirectButton, wifiButtonLp);
-        wifiDirectButton.setOnClickListener(v -> { if (wifiDirect != null && wifiDirect.isConnected()) chooseFilesForWifiDirect(); else ensureWifiDirectPermission(); });
+        wifiDirectStatus.setText("Choose a sharing mode to begin"); wifiDirectStatus.setTextSize(13); wifiDirectStatus.setTextColor(0xFF526477);
+        wifiDeviceCard.addView(wifiDirectStatus, params(-1, -2));
+        logoAnimation = new LogoDropView(this);
+        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(112), dp(112)); logoLp.gravity = Gravity.CENTER_HORIZONTAL; logoLp.topMargin = dp(8);
+        wifiDeviceCard.addView(logoAnimation, logoLp);
+        TextView wifiDirectFootnote = new TextView(this);
+        wifiDirectFootnote.setText("Keep both phones unlocked with QuickDrop open while connecting."); wifiDirectFootnote.setTextSize(11); wifiDirectFootnote.setTextColor(0xFF8190A0);
+        LinearLayout.LayoutParams footLp = params(-1, -2); footLp.topMargin = dp(4); wifiDeviceCard.addView(wifiDirectFootnote, footLp);
 
         errorText = new TextView(this); errorText.setTextColor(0xFFB42318); errorText.setTextSize(12);
         LinearLayout.LayoutParams errLp = params(-1, -2); errLp.topMargin = dp(10); root.addView(errorText, errLp);
@@ -336,20 +382,38 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void startWifiMode(String mode) {
+        wifiMode = mode;
+        wifiPickerOpened = false;
+        wifiCardTitle.setText(mode.equals("receive") ? "Sharing to you" : "Sending to nearby devices");
+        wifiDirectStatus.setText(mode.equals("receive") ? "receiving ready" : "looking for devices");
+        wifiDeviceCard.removeViews(1, Math.max(0, wifiDeviceCard.getChildCount() - 1));
+        wifiDeviceCard.addView(logoAnimation, new LinearLayout.LayoutParams(dp(112), dp(112)));
+        logoAnimation.setAnimating(true);
+        wifiSendButton.setAlpha(mode.equals("send") ? 1f : 0.72f);
+        wifiReceiveButton.setAlpha(mode.equals("receive") ? 1f : 0.72f);
+        if (wifiDirect != null && wifiDirect.isConnected()) {
+            if (mode.equals("send") && wifiDirect.canSend()) chooseFilesForWifiDirect();
+            else if (mode.equals("receive")) wifiDirectStatus.setText("receiving ready");
+            return;
+        }
+        ensureWifiDirectPermission();
+    }
+
     private void ensureWifiDirectPermission() {
         String permission = Build.VERSION.SDK_INT >= 33 ? "android.permission.NEARBY_WIFI_DEVICES" : Manifest.permission.ACCESS_FINE_LOCATION;
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{permission}, WIFI_PERMISSION);
             return;
         }
-        if (wifiDirect != null) wifiDirect.discover();
+        if (wifiDirect != null) wifiDirect.discover(wifiMode.equals("receive"));
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == WIFI_PERMISSION) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                if (wifiDirect != null) wifiDirect.discover();
+                if (wifiDirect != null) wifiDirect.discover(wifiMode.equals("receive"));
             } else {
                 wifiDirectStatus.setText("Nearby devices permission is needed for Wi-Fi Direct. Browser sharing still works without it.");
             }
@@ -357,16 +421,39 @@ public class MainActivity extends Activity {
     }
 
     private void showWifiDirectPeers(java.util.List<android.net.wifi.p2p.WifiP2pDevice> peers) {
-        if (peers == null || peers.isEmpty()) return;
-        String[] names = new String[peers.size()];
-        for (int i = 0; i < peers.size(); i++) {
-            android.net.wifi.p2p.WifiP2pDevice device = peers.get(i);
-            names[i] = (device.deviceName == null || device.deviceName.trim().isEmpty() ? "Android device" : device.deviceName)
-                    + " · " + (device.status == android.net.wifi.p2p.WifiP2pDevice.AVAILABLE ? "Available" : "Nearby");
+        if (wifiDeviceCard == null || wifiMode.isEmpty()) return;
+        // Keep the status and animated logo at the top; replace only device rows.
+        while (wifiDeviceCard.getChildCount() > 2) wifiDeviceCard.removeViewAt(2);
+        if (peers == null || peers.isEmpty()) {
+            logoAnimation.setAnimating(true);
+            wifiDirectStatus.setText(wifiMode.equals("receive") ? "receiving ready" : "looking for devices");
+            return;
         }
-        new android.app.AlertDialog.Builder(this).setTitle("Nearby QuickDrop devices")
-                .setItems(names, (dialog, which) -> wifiDirect.connect(peers.get(which)))
-                .setNegativeButton("Cancel", null).show();
+        logoAnimation.setAnimating(false);
+        wifiDirectStatus.setText(wifiMode.equals("receive") ? "Nearby device detected · Ready to receive" : "Select a nearby device to connect");
+        for (android.net.wifi.p2p.WifiP2pDevice device : peers) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(10), dp(10), dp(10), dp(10));
+            android.graphics.drawable.GradientDrawable rowBg = new android.graphics.drawable.GradientDrawable();
+            rowBg.setColor(0xFFF4F8FD); rowBg.setCornerRadius(dp(10)); row.setBackground(rowBg);
+            LinearLayout.LayoutParams rowLp = params(-1, -2); rowLp.topMargin = dp(7); wifiDeviceCard.addView(row, rowLp);
+            TextView deviceIcon = new TextView(this); deviceIcon.setText("▣"); deviceIcon.setTextSize(25); deviceIcon.setTextColor(0xFF2563EB);
+            row.addView(deviceIcon, params(dp(38), -2));
+            LinearLayout labels = new LinearLayout(this); labels.setOrientation(LinearLayout.VERTICAL);
+            row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView name = new TextView(this); name.setText(device.deviceName == null || device.deviceName.trim().isEmpty() ? "Nearby Android device" : device.deviceName);
+            name.setTextSize(14); name.setTypeface(null, 1); name.setTextColor(0xFF18324A); labels.addView(name);
+            TextView state = new TextView(this); state.setText(device.status == android.net.wifi.p2p.WifiP2pDevice.AVAILABLE ? "Available · QuickDrop nearby" : "Nearby · Tap to connect");
+            state.setTextSize(11); state.setTextColor(0xFF68798A); labels.addView(state);
+            TextView action = new TextView(this); action.setText(wifiMode.equals("receive") ? "Receive" : "Connect"); action.setTextSize(12); action.setTypeface(null, 1); action.setTextColor(0xFF2563EB);
+            row.addView(action, params(-2, -2));
+            row.setOnClickListener(v -> {
+                logoAnimation.setAnimating(false);
+                wifiDirectStatus.setText("Connecting to " + name.getText() + "…");
+                wifiDirect.connect(device, wifiMode.equals("receive"));
+            });
+        }
     }
 
     private void chooseFilesForWifiDirect() {

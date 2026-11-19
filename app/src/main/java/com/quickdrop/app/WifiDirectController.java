@@ -98,7 +98,9 @@ public class WifiDirectController {
         if (registered) { try { activity.unregisterReceiver(receiver); } catch (Exception ignored) { } registered = false; }
     }
 
-    public void discover() {
+    public void discover() { discover(false); }
+
+    public void discover(boolean receiveMode) {
         if (manager == null || channel == null) { status("This device does not provide Android Wi-Fi Direct."); return; }
         try {
             manager.discoverPeers(channel, new WifiP2pManager.ActionListener() {
@@ -111,14 +113,17 @@ public class WifiDirectController {
         } catch (SecurityException e) { status("Allow Nearby devices permission to discover phones."); }
     }
 
-    public void connect(WifiP2pDevice device) {
+    public void connect(WifiP2pDevice device) { connect(device, false); }
+
+    public void connect(WifiP2pDevice device, boolean preferGroupOwner) {
         if (device == null) return;
         WifiP2pConfig config = new WifiP2pConfig();
         config.deviceAddress = device.deviceAddress;
-        // Use push-button configuration explicitly. Prefer the selected peer as
-        // group owner so this phone can act as the sender in this initial flow.
+        // Receiver mode strongly prefers this phone as group owner; sender mode
+        // yields group-owner priority so the selected receiving phone can host
+        // the receive socket. Android still makes the final negotiation decision.
         config.wps.setup = WpsInfo.PBC;
-        config.groupOwnerIntent = 0;
+        config.groupOwnerIntent = preferGroupOwner ? 15 : 0;
         try {
             manager.connect(channel, config, new WifiP2pManager.ActionListener() {
                 @Override public void onSuccess() { status("Invitation sent to " + device.deviceName + ". Android may show a system connection approval on the other phone; keep both screens unlocked while they connect."); }
