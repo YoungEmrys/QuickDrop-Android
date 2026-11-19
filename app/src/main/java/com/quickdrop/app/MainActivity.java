@@ -32,12 +32,16 @@ public class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION = 502;
     private static final int FILE_PICKER = 503;
     private static final int SHARE_PICKER = 504;
+    private static final int WIFI_DIRECT_PICKER = 505;
+    private static final int WIFI_PERMISSION = 506;
     private android.webkit.ValueCallback<Uri[]> fileCallback;
     private final Handler handler = new Handler();
     private SharedPreferences prefs;
     private LinearLayout root;
     private TextView status, folderLabel, shareLink, errorText;
-    private Button startStop, openPanel, shareToApps;
+    private Button startStop, openPanel, shareToApps, wifiDirectButton;
+    private TextView wifiDirectStatus;
+    private WifiDirectController wifiDirect;
     private CheckBox keepRunning;
     private WebView webView;
     private boolean panelVisible = false;
@@ -47,6 +51,16 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("quickdrop_settings", MODE_PRIVATE);
         StorageBridge.initialize(this);
         buildUi();
+        wifiDirect = new WifiDirectController(this, new WifiDirectController.Listener() {
+            @Override public void onStatus(String message) { wifiDirectStatus.setText(message); }
+            @Override public void onPeers(java.util.List<android.net.wifi.p2p.WifiP2pDevice> peers) { showWifiDirectPeers(peers); }
+            @Override public void onConnected(boolean connected) {
+                boolean canSend = connected && wifiDirect.canSend();
+                wifiDirectButton.setText(!connected ? "Find nearby QuickDrop devices" : (canSend ? "Send files via Wi-Fi Direct" : "Connected · Ready to receive"));
+                wifiDirectButton.setEnabled(!connected || canSend);
+                wifiDirectButton.setAlpha(wifiDirectButton.isEnabled() ? 1f : 0.7f);
+            }
+        });
         refreshUi();
         handler.post(poll);
     }
@@ -120,6 +134,22 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams shareAppsLp = params(-1, dp(48)); shareAppsLp.topMargin = dp(9);
         root.addView(shareToApps, shareAppsLp);
         shareToApps.setOnClickListener(v -> chooseFilesForExternalSharing());
+
+        TextView wifiTitle = sectionTitle("Wi-Fi Direct (Android to Android)");
+        LinearLayout.LayoutParams wifiTitleLp = params(-1, -2); wifiTitleLp.topMargin = dp(22);
+        root.addView(wifiTitle, wifiTitleLp);
+        wifiDirectStatus = new TextView(this);
+        wifiDirectStatus.setText("Connect directly to another Android phone with QuickDrop installed. No hotspot or internet required.");
+        wifiDirectStatus.setTextSize(13); wifiDirectStatus.setTextColor(0xFF526477);
+        LinearLayout.LayoutParams wifiStatusLp = params(-1, -2); wifiStatusLp.topMargin = dp(6);
+        root.addView(wifiDirectStatus, wifiStatusLp);
+        wifiDirectButton = button("Find nearby QuickDrop devices");
+        LinearLayout.LayoutParams wifiButtonLp = params(-1, dp(48)); wifiButtonLp.topMargin = dp(9);
+        root.addView(wifiDirectButton, wifiButtonLp);
+        wifiDirectButton.setOnClickListener(v -> {
+            if (wifiDirect != null && wifiDirect.isConnected()) chooseFilesForWifiDirect();
+            else ensureWifiDirectPermission();
+        });
 
         errorText = new TextView(this); errorText.setTextColor(0xFFB42318); errorText.setTextSize(12);
         LinearLayout.LayoutParams errLp = params(-1, -2); errLp.topMargin = dp(10);
@@ -215,6 +245,14 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        if (requestCode == WIFI_DIRECT_PICKER && resultCode == RESULT_OK && data != null) {
+            java.util.ArrayList<Uri> selected = new java.util.ArrayList<>();
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++) selected.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) selected.add(data.getData());
+            if (wifiDirect != null && !selected.isEmpty()) wifiDirect.sendFiles(selected);
+            return;
+        }
         if (requestCode == PICK_FOLDER && resultCode == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
             int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
@@ -272,6 +310,48 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void ensureWifiDirectPermission() {
+        String permission = Build.VERSION.SDK_INT >= 33 ? "android.permission.NEARBY_WIFI_DEVICES" : Manifest.permission.ACCESS_FINE_LOCATION;
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{permission}, WIFI_PERMISSION);
+            return;
+        }
+        if (wifiDirect != null) wifiDirect.discover();
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == WIFI_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (wifiDirect != null) wifiDirect.discover();
+            } else {
+                wifiDirectStatus.setText("Nearby devices permission is needed for Wi-Fi Direct. Browser sharing still works without it.");
+            }
+        }
+    }
+
+    private void showWifiDirectPeers(java.util.List<android.net.wifi.p2p.WifiP2pDevice> peers) {
+        if (peers == null || peers.isEmpty()) return;
+        String[] names = new String[peers.size()];
+        for (int i = 0; i < peers.size(); i++) {
+            android.net.wifi.p2p.WifiP2pDevice device = peers.get(i);
+            names[i] = (device.deviceName == null || device.deviceName.trim().isEmpty() ? "Android device" : device.deviceName)
+                    + " · " + (device.status == android.net.wifi.p2p.WifiP2pDevice.AVAILABLE ? "Available" : "Nearby");
+        }
+        new android.app.AlertDialog.Builder(this).setTitle("Nearby QuickDrop devices")
+                .setItems(names, (dialog, which) -> wifiDirect.connect(peers.get(which)))
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    private void chooseFilesForWifiDirect() {
+        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        picker.addCategory(Intent.CATEGORY_OPENABLE); picker.setType("*/*");
+        picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try { startActivityForResult(picker, WIFI_DIRECT_PICKER); }
+        catch (Exception e) { Toast.makeText(this, "No file picker is available.", Toast.LENGTH_SHORT).show(); }
+    }
+
     private void openControlPanel() {
         String url = prefs.getString("admin_url", "");
         if (url.isEmpty() || !prefs.getBoolean("server_running", false)) {
@@ -280,6 +360,16 @@ public class MainActivity extends Activity {
         panelVisible = true;
         webView.loadUrl(url);
         setContentView(webView);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (wifiDirect != null) wifiDirect.register();
+    }
+
+    @Override protected void onPause() {
+        if (wifiDirect != null) wifiDirect.unregister();
+        super.onPause();
     }
 
     @Override public void onBackPressed() {
@@ -329,6 +419,7 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         handler.removeCallbacks(poll);
         if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
+        if (wifiDirect != null) wifiDirect.close();
         super.onDestroy();
     }
 }

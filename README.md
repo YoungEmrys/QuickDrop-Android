@@ -66,3 +66,17 @@ If you change the selected folder while the server is running, stop and start th
 - The app serves over local HTTP on the local network, as the original Termux version did. Use it only on a trusted Wi-Fi/hotspot network and stop sharing when finished. The random share-token URL is intended to limit access, but it is not a substitute for encrypted HTTPS.
 >>>>>>> 77445e7 (Initial QuickDrop Android app)
 
+
+## Stage 1.5 — Native Wi-Fi Direct (initial transfer implementation)
+
+This stage adds Android Wi-Fi Direct discovery and pairing using `WifiP2pManager`, plus a direct TCP file-transfer channel. Both Android phones must have QuickDrop installed. The existing hotspot + QR/browser workflow and Android Sharesheet remain separate and unchanged.
+
+### First test
+1. Install the same Stage 1.5 APK on two Android phones.
+2. Enable Wi-Fi on both phones. Keep QuickDrop open on both. On Android 13+, allow **Nearby devices** when asked. On Android 12 and earlier, allow location permission. If discovery returns no devices, also turn the phone's Location setting on and scan again.
+3. On one phone, tap **Find nearby QuickDrop devices** and select the other phone when it appears. Accept any Android connection prompt.
+4. Android chooses one phone as the Wi-Fi Direct group owner. In this initial implementation, the group owner receives; the other phone selects files and sends them using **Send files via Wi-Fi Direct**.
+5. Received files are saved in QuickDrop's storage folder. If a shared folder was selected in QuickDrop settings, the received file is also copied there.
+
+### Current limitation
+This is the first Wi-Fi Direct transfer pass and currently supports transfer from the non-group-owner phone to the group-owner phone. Android chooses the group owner during connection negotiation; the app does not yet let users choose that role. Bidirectional transfer, richer transfer progress, cancellation, and integrity verification are planned follow-up work. If a phone does not support Wi-Fi Direct, the existing browser and Sharesheet methods remain available.
