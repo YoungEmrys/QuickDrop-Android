@@ -22,6 +22,16 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.FrameLayout;
+import android.view.Gravity;
+import android.view.animation.DecelerateInterpolator;
+import android.content.ClipData;
+import android.database.Cursor;
+import android.provider.OpenableColumns;
+import java.io.InputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.util.ArrayList;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -31,15 +41,16 @@ public class MainActivity extends Activity {
     private static final int PICK_FOLDER = 501;
     private static final int NOTIFICATION_PERMISSION = 502;
     private static final int FILE_PICKER = 503;
-    private static final int SHARE_PICKER = 504;
     private static final int WIFI_DIRECT_PICKER = 505;
     private static final int WIFI_PERMISSION = 506;
     private android.webkit.ValueCallback<Uri[]> fileCallback;
     private final Handler handler = new Handler();
     private SharedPreferences prefs;
     private LinearLayout root;
+    private FrameLayout shell, drawer;
+    private boolean drawerOpen = false;
     private TextView status, folderLabel, shareLink, errorText;
-    private Button startStop, openPanel, shareToApps, wifiDirectButton;
+    private Button startStop, openPanel, wifiDirectButton, menuButton;
     private TextView wifiDirectStatus;
     private WifiDirectController wifiDirect;
     private CheckBox keepRunning;
@@ -62,140 +73,175 @@ public class MainActivity extends Activity {
             }
         });
         refreshUi();
+        handleIncomingShare(getIntent());
         handler.post(poll);
     }
 
     private void buildUi() {
+        shell = new FrameLayout(this);
+        shell.setBackgroundColor(0xFFF4F7FB);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(20), dp(20), dp(16));
-        root.setBackgroundColor(0xFFF4F7FB);
+        root.setPadding(dp(20), dp(12), dp(20), dp(24));
 
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
         TextView title = new TextView(this);
-        title.setText("QuickDrop"); title.setTextSize(30); title.setTextColor(0xFF102A43);
-        title.setTypeface(null, 1);
-        root.addView(title);
+        title.setText("QuickDrop"); title.setTextSize(27); title.setTextColor(0xFF102A43); title.setTypeface(null, 1);
+        toolbar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        menuButton = new Button(this); menuButton.setText("☰"); menuButton.setTextSize(22); menuButton.setAllCaps(false);
+        menuButton.setTextColor(0xFF102A43); menuButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFFE5EDF7));
+        toolbar.addView(menuButton, params(dp(52), dp(48)));
+        root.addView(toolbar, params(-1, -2));
+        menuButton.setOnClickListener(v -> toggleDrawer(true));
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Share files between your phone and devices on the same Wi-Fi or hotspot.");
-        subtitle.setTextSize(15); subtitle.setTextColor(0xFF526477);
-        LinearLayout.LayoutParams subLp = params(-1, -2); subLp.topMargin = dp(5);
-        root.addView(subtitle, subLp);
+        subtitle.setText("Share files between your phone and nearby devices.");
+        subtitle.setTextSize(14); subtitle.setTextColor(0xFF526477);
+        LinearLayout.LayoutParams subLp = params(-1, -2); subLp.topMargin = dp(4); root.addView(subtitle, subLp);
 
         status = new TextView(this);
         status.setText("Server is stopped"); status.setTextSize(16); status.setTextColor(0xFF8A3B12);
         status.setPadding(dp(14), dp(14), dp(14), dp(14)); status.setBackgroundColor(0xFFFFF0DF);
-        LinearLayout.LayoutParams statusLp = params(-1, -2); statusLp.topMargin = dp(20);
-        root.addView(status, statusLp);
+        LinearLayout.LayoutParams statusLp = params(-1, -2); statusLp.topMargin = dp(20); root.addView(status, statusLp);
 
         startStop = button("Start sharing");
-        LinearLayout.LayoutParams startLp = params(-1, dp(52)); startLp.topMargin = dp(14);
-        root.addView(startStop, startLp);
-        startStop.setOnClickListener(v -> {
-            if (prefs.getBoolean("server_running", false)) stopServer(); else startServer();
-        });
-
-        TextView storageTitle = sectionTitle("Storage folder");
-        LinearLayout.LayoutParams secLp = params(-1, -2); secLp.topMargin = dp(22);
-        root.addView(storageTitle, secLp);
-        folderLabel = new TextView(this); folderLabel.setTextSize(13); folderLabel.setTextColor(0xFF526477);
-        LinearLayout.LayoutParams folderLp = params(-1, -2); folderLp.topMargin = dp(6);
-        root.addView(folderLabel, folderLp);
-        Button chooseFolder = button("Choose a folder");
-        LinearLayout.LayoutParams chooseLp = params(-1, dp(46)); chooseLp.topMargin = dp(9);
-        root.addView(chooseFolder, chooseLp);
-        chooseFolder.setOnClickListener(v -> chooseFolder());
+        LinearLayout.LayoutParams startLp = params(-1, dp(54)); startLp.topMargin = dp(14); root.addView(startStop, startLp);
+        startStop.setOnClickListener(v -> { if (prefs.getBoolean("server_running", false)) stopServer(); else startServer(); });
 
         keepRunning = new CheckBox(this);
-        keepRunning.setText("Keep sharing after leaving QuickDrop");
-        keepRunning.setTextColor(0xFF263746); keepRunning.setTextSize(14);
+        keepRunning.setText("Keep sharing after leaving QuickDrop"); keepRunning.setTextColor(0xFF263746); keepRunning.setTextSize(14);
         keepRunning.setChecked(prefs.getBoolean("keep_running", false));
-        LinearLayout.LayoutParams keepLp = params(-1, -2); keepLp.topMargin = dp(15);
-        root.addView(keepRunning, keepLp);
+        LinearLayout.LayoutParams keepLp = params(-1, -2); keepLp.topMargin = dp(15); root.addView(keepRunning, keepLp);
         keepRunning.setOnCheckedChangeListener((b, checked) -> prefs.edit().putBoolean("keep_running", checked).apply());
-
         TextView note = new TextView(this);
         note.setText("When this is off, QuickDrop stops if you swipe the app away from Recents. When it is on, sharing continues in the background until you stop it.");
         note.setTextColor(0xFF68798A); note.setTextSize(12);
-        LinearLayout.LayoutParams noteLp = params(-1, -2); noteLp.topMargin = dp(2);
-        root.addView(note, noteLp);
+        LinearLayout.LayoutParams noteLp = params(-1, -2); noteLp.topMargin = dp(2); root.addView(note, noteLp);
 
-        shareLink = new TextView(this); shareLink.setTextSize(13); shareLink.setTextColor(0xFF1456A0);
-        shareLink.setTextIsSelectable(true);
-        LinearLayout.LayoutParams linkLp = params(-1, -2); linkLp.topMargin = dp(18);
-        root.addView(shareLink, linkLp);
-
-        openPanel = button("Open QuickDrop control panel");
-        LinearLayout.LayoutParams panelLp = params(-1, dp(48)); panelLp.topMargin = dp(10);
-        root.addView(openPanel, panelLp);
-        openPanel.setOnClickListener(v -> openControlPanel());
-
-        shareToApps = button("Share files with other apps");
-        LinearLayout.LayoutParams shareAppsLp = params(-1, dp(48)); shareAppsLp.topMargin = dp(9);
-        root.addView(shareToApps, shareAppsLp);
-        shareToApps.setOnClickListener(v -> chooseFilesForExternalSharing());
+        shareLink = new TextView(this); shareLink.setTextSize(13); shareLink.setTextColor(0xFF1456A0); shareLink.setTextIsSelectable(true);
+        LinearLayout.LayoutParams linkLp = params(-1, -2); linkLp.topMargin = dp(18); root.addView(shareLink, linkLp);
 
         TextView wifiTitle = sectionTitle("Wi-Fi Direct (Android to Android)");
-        LinearLayout.LayoutParams wifiTitleLp = params(-1, -2); wifiTitleLp.topMargin = dp(22);
-        root.addView(wifiTitle, wifiTitleLp);
+        LinearLayout.LayoutParams wifiTitleLp = params(-1, -2); wifiTitleLp.topMargin = dp(24); root.addView(wifiTitle, wifiTitleLp);
         wifiDirectStatus = new TextView(this);
         wifiDirectStatus.setText("Connect directly to another Android phone with QuickDrop installed. No hotspot or internet required.");
         wifiDirectStatus.setTextSize(13); wifiDirectStatus.setTextColor(0xFF526477);
-        LinearLayout.LayoutParams wifiStatusLp = params(-1, -2); wifiStatusLp.topMargin = dp(6);
-        root.addView(wifiDirectStatus, wifiStatusLp);
+        LinearLayout.LayoutParams wifiStatusLp = params(-1, -2); wifiStatusLp.topMargin = dp(6); root.addView(wifiDirectStatus, wifiStatusLp);
         wifiDirectButton = button("Find nearby QuickDrop devices");
-        LinearLayout.LayoutParams wifiButtonLp = params(-1, dp(48)); wifiButtonLp.topMargin = dp(9);
-        root.addView(wifiDirectButton, wifiButtonLp);
-        wifiDirectButton.setOnClickListener(v -> {
-            if (wifiDirect != null && wifiDirect.isConnected()) chooseFilesForWifiDirect();
-            else ensureWifiDirectPermission();
-        });
+        LinearLayout.LayoutParams wifiButtonLp = params(-1, dp(50)); wifiButtonLp.topMargin = dp(9); root.addView(wifiDirectButton, wifiButtonLp);
+        wifiDirectButton.setOnClickListener(v -> { if (wifiDirect != null && wifiDirect.isConnected()) chooseFilesForWifiDirect(); else ensureWifiDirectPermission(); });
 
         errorText = new TextView(this); errorText.setTextColor(0xFFB42318); errorText.setTextSize(12);
-        LinearLayout.LayoutParams errLp = params(-1, -2); errLp.topMargin = dp(10);
-        root.addView(errorText, errLp);
+        LinearLayout.LayoutParams errLp = params(-1, -2); errLp.topMargin = dp(10); root.addView(errorText, errLp);
 
         webView = new WebView(this);
-        webView.getSettings().setJavaScriptEnabled(true);
-        webView.getSettings().setDomStorageEnabled(true);
-        webView.getSettings().setAllowFileAccess(false);
-        if (Build.VERSION.SDK_INT >= 26) {
-            // Keep the WebView renderer important while file transfers are in progress.
-            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true);
-        }
+        webView.getSettings().setJavaScriptEnabled(true); webView.getSettings().setDomStorageEnabled(true); webView.getSettings().setAllowFileAccess(false);
+        if (Build.VERSION.SDK_INT >= 26) webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true);
         webView.setWebViewClient(new WebViewClient());
         webView.setWebChromeClient(new WebChromeClient() {
-            @Override public boolean onShowFileChooser(WebView view, android.webkit.ValueCallback<Uri[]> callback,
-                    FileChooserParams params) {
-                if (fileCallback != null) fileCallback.onReceiveValue(null);
-                fileCallback = callback;
-                try {
-                    Intent picker = params.createIntent();
-                    startActivityForResult(picker, FILE_PICKER);
-                    return true;
-                } catch (Exception e) {
-                    fileCallback = null;
-                    Toast.makeText(MainActivity.this, "Unable to open file picker", Toast.LENGTH_SHORT).show();
-                    return false;
-                }
+            @Override public boolean onShowFileChooser(WebView view, android.webkit.ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (fileCallback != null) fileCallback.onReceiveValue(null); fileCallback = callback;
+                try { startActivityForResult(params.createIntent(), FILE_PICKER); return true; }
+                catch (Exception e) { fileCallback = null; Toast.makeText(MainActivity.this, "Unable to open file picker", Toast.LENGTH_SHORT).show(); return false; }
             }
         });
         webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
             try {
                 String fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType);
                 DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-                request.setTitle(fileName).setDescription("Downloading with QuickDrop")
-                        .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                        .setAllowedOverMetered(true).setAllowedOverRoaming(true);
+                request.setTitle(fileName).setDescription("Downloading with QuickDrop").setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED).setAllowedOverMetered(true).setAllowedOverRoaming(true);
                 if (mimeType != null) request.setMimeType(mimeType);
                 request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-                ((DownloadManager) getSystemService(DOWNLOAD_SERVICE)).enqueue(request);
+                ((DownloadManager)getSystemService(DOWNLOAD_SERVICE)).enqueue(request);
                 Toast.makeText(MainActivity.this, "Download started", Toast.LENGTH_SHORT).show();
-            } catch (Exception e) {
-                Toast.makeText(MainActivity.this, "Download could not start: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            }
+            } catch (Exception e) { Toast.makeText(MainActivity.this, "Download could not start: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
         });
-        setContentView(root);
+
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setClipToPadding(false); scroll.addView(root);
+        shell.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+
+        drawer = new FrameLayout(this); drawer.setBackgroundColor(0xFFFFFFFF); drawer.setElevation(dp(12));
+        LinearLayout drawerContent = new LinearLayout(this); drawerContent.setOrientation(LinearLayout.VERTICAL);
+        drawerContent.setPadding(dp(18), dp(18), dp(18), dp(18));
+        Button back = button("←  Back"); back.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        drawerContent.addView(back, params(-1, dp(48))); back.setOnClickListener(v -> toggleDrawer(false));
+        TextView menuHeading = sectionTitle("QuickDrop menu");
+        LinearLayout.LayoutParams mh = params(-1, -2); mh.topMargin = dp(24); drawerContent.addView(menuHeading, mh);
+        TextView storageTitle = sectionTitle("Storage folder");
+        LinearLayout.LayoutParams secLp = params(-1, -2); secLp.topMargin = dp(22); drawerContent.addView(storageTitle, secLp);
+        folderLabel = new TextView(this); folderLabel.setTextSize(13); folderLabel.setTextColor(0xFF526477);
+        LinearLayout.LayoutParams folderLp = params(-1, -2); folderLp.topMargin = dp(6); drawerContent.addView(folderLabel, folderLp);
+        Button chooseFolder = button("Choose a folder");
+        LinearLayout.LayoutParams chooseLp = params(-1, dp(46)); chooseLp.topMargin = dp(9); drawerContent.addView(chooseFolder, chooseLp);
+        chooseFolder.setOnClickListener(v -> { toggleDrawer(false); chooseFolder(); });
+        openPanel = button("Open control panel");
+        LinearLayout.LayoutParams panelLp = params(-1, dp(48)); panelLp.topMargin = dp(12); drawerContent.addView(openPanel, panelLp);
+        openPanel.setOnClickListener(v -> { toggleDrawer(false); openControlPanel(); });
+        FrameLayout.LayoutParams drawerContentLp = new FrameLayout.LayoutParams(-1, -1); drawer.addView(drawerContent, drawerContentLp);
+        int drawerWidth = Math.min(dp(320), (int)(getResources().getDisplayMetrics().widthPixels * 0.86f));
+        FrameLayout.LayoutParams drawerLp = new FrameLayout.LayoutParams(drawerWidth, -1, Gravity.RIGHT | Gravity.TOP);
+        drawer.setTranslationX(drawerWidth); shell.addView(drawer, drawerLp);
+        setContentView(shell);
+    }
+
+    private void toggleDrawer(boolean show) {
+        if (drawer == null || drawerOpen == show) return;
+        drawerOpen = show;
+        float target = show ? 0f : drawer.getWidth();
+        if (drawer.getWidth() == 0) drawer.post(() -> drawer.animate().translationX(show ? 0f : drawer.getWidth()).setDuration(230).setInterpolator(new DecelerateInterpolator()).start());
+        else drawer.animate().translationX(target).setDuration(230).setInterpolator(new DecelerateInterpolator()).start();
+    }
+
+    private void handleIncomingShare(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (!Intent.ACTION_SEND.equals(action) && !Intent.ACTION_SEND_MULTIPLE.equals(action)) return;
+        ArrayList<Uri> incoming = new ArrayList<>();
+        if (Intent.ACTION_SEND.equals(action)) {
+            Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (uri == null && intent.getData() != null) uri = intent.getData();
+            if (uri != null) incoming.add(uri);
+        } else {
+            ArrayList<Uri> list = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            if (list != null) incoming.addAll(list);
+        }
+        if (incoming.isEmpty()) { Toast.makeText(this, "No shared file was received.", Toast.LENGTH_LONG).show(); return; }
+        new Thread(() -> {
+            File folder = new File(getFilesDir(), "QuickDrop"); if (!folder.exists()) folder.mkdirs();
+            int saved = 0;
+            for (Uri uri : incoming) {
+                try {
+                    String name = incomingName(uri);
+                    File target = uniqueIncomingFile(folder, name);
+                    try (InputStream in = getContentResolver().openInputStream(uri); FileOutputStream out = new FileOutputStream(target)) {
+                        if (in == null) continue;
+                        byte[] buffer = new byte[64 * 1024]; int n; while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+                    }
+                    StorageBridge.exportFile(folder.getAbsolutePath(), target.getName()); saved++;
+                } catch (Exception e) { android.util.Log.e("QuickDrop", "Could not import shared file", e); }
+            }
+            final int count = saved;
+            runOnUiThread(() -> Toast.makeText(this, count + " file(s) saved to QuickDrop storage" + (StorageBridge.getTreeUri().isEmpty() ? ". Choose a shared folder from the menu to mirror them there." : " and copied to your shared folder."), Toast.LENGTH_LONG).show());
+        }, "QuickDrop-Share-Import").start();
+    }
+
+    private String incomingName(Uri uri) {
+        try (android.database.Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) { int ix = c.getColumnIndex(OpenableColumns.DISPLAY_NAME); if (ix >= 0) return safeIncomingName(c.getString(ix)); }
+        } catch (Exception ignored) { }
+        return safeIncomingName(uri.getLastPathSegment());
+    }
+    private String safeIncomingName(String name) {
+        String v = name == null ? "shared-file" : name.replaceAll("[\\/:*?\"<>|]", "_").trim();
+        return v.isEmpty() ? "shared-file" : v;
+    }
+    private File uniqueIncomingFile(File folder, String name) {
+        File f = new File(folder, name); if (!f.exists()) return f;
+        String base = name, ext = ""; int dot = name.lastIndexOf('.'); if (dot > 0) { base = name.substring(0, dot); ext = name.substring(dot); }
+        for (int i = 1; i < 10000; i++) { f = new File(folder, base + " (" + i + ")" + ext); if (!f.exists()) return f; }
+        return new File(folder, System.currentTimeMillis() + "-" + name);
     }
 
     private void startServer() {
@@ -211,7 +257,7 @@ public class MainActivity extends Activity {
     private void stopServer() {
         startService(new Intent(this, ServerService.class).setAction(ServerService.ACTION_STOP));
         panelVisible = false;
-        setContentView(root);
+        setContentView(shell);
         refreshUi();
     }
 
@@ -239,12 +285,6 @@ public class MainActivity extends Activity {
             }
             return;
         }
-        if (requestCode == SHARE_PICKER) {
-            if (resultCode == RESULT_OK && data != null) {
-                shareSelectedFiles(data);
-            }
-            return;
-        }
         if (requestCode == WIFI_DIRECT_PICKER && resultCode == RESULT_OK && data != null) {
             java.util.ArrayList<Uri> selected = new java.util.ArrayList<>();
             if (data.getClipData() != null) {
@@ -260,53 +300,6 @@ public class MainActivity extends Activity {
             StorageBridge.setTreeUri(uri.toString());
             Toast.makeText(this, "Storage folder selected. Restart sharing to apply it.", Toast.LENGTH_LONG).show();
             refreshUi();
-        }
-    }
-
-    private void chooseFilesForExternalSharing() {
-        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        picker.addCategory(Intent.CATEGORY_OPENABLE);
-        picker.setType("*/*");
-        picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-        try {
-            startActivityForResult(picker, SHARE_PICKER);
-        } catch (Exception e) {
-            Toast.makeText(this, "No file picker is available.", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void shareSelectedFiles(Intent pickerResult) {
-        java.util.ArrayList<Uri> files = new java.util.ArrayList<>();
-        if (pickerResult.getClipData() != null) {
-            android.content.ClipData clip = pickerResult.getClipData();
-            for (int i = 0; i < clip.getItemCount(); i++) {
-                Uri uri = clip.getItemAt(i).getUri();
-                if (uri != null) files.add(uri);
-            }
-        } else if (pickerResult.getData() != null) {
-            files.add(pickerResult.getData());
-        }
-        if (files.isEmpty()) return;
-
-        try {
-            Intent send;
-            if (files.size() == 1) {
-                Uri uri = files.get(0);
-                String mime = getContentResolver().getType(uri);
-                send = new Intent(Intent.ACTION_SEND);
-                send.setType(mime == null ? "*/*" : mime);
-                send.putExtra(Intent.EXTRA_STREAM, uri);
-            } else {
-                send = new Intent(Intent.ACTION_SEND_MULTIPLE);
-                send.setType("*/*");
-                send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, files);
-            }
-            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            Intent chooser = Intent.createChooser(send, "Share with");
-            startActivity(chooser);
-        } catch (Exception e) {
-            Toast.makeText(this, "Unable to open Android sharing options: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -362,6 +355,10 @@ public class MainActivity extends Activity {
         setContentView(webView);
     }
 
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent); setIntent(intent); handleIncomingShare(intent);
+    }
+
     @Override protected void onResume() {
         super.onResume();
         if (wifiDirect != null) wifiDirect.register();
@@ -373,9 +370,10 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if (drawerOpen) { toggleDrawer(false); return; }
         if (panelVisible) {
             panelVisible = false;
-            setContentView(root);
+            setContentView(shell);
             refreshUi();
         } else super.onBackPressed();
     }
