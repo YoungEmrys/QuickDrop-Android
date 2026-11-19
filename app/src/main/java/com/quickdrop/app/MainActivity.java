@@ -47,7 +47,8 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler();
     private SharedPreferences prefs;
     private LinearLayout root;
-    private FrameLayout shell, drawer;
+    private FrameLayout shell, drawer, drawerPanel;
+    private View drawerScrim;
     private boolean drawerOpen = false;
     private TextView status, folderLabel, shareLink, errorText;
     private Button startStop, openPanel, wifiDirectButton, menuButton;
@@ -91,7 +92,8 @@ public class MainActivity extends Activity {
         title.setText("QuickDrop"); title.setTextSize(27); title.setTextColor(0xFF102A43); title.setTypeface(null, 1);
         toolbar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         menuButton = new Button(this); menuButton.setText("☰"); menuButton.setTextSize(22); menuButton.setAllCaps(false);
-        menuButton.setTextColor(0xFF102A43); menuButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFFE5EDF7));
+        menuButton.setTextColor(0xFF102A43); menuButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));
+        menuButton.setBackgroundColor(android.graphics.Color.TRANSPARENT); menuButton.setMinWidth(0); menuButton.setMinHeight(0);
         toolbar.addView(menuButton, params(dp(52), dp(48)));
         root.addView(toolbar, params(-1, -2));
         menuButton.setOnClickListener(v -> toggleDrawer(true));
@@ -162,15 +164,36 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setClipToPadding(false); scroll.addView(root);
         shell.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
 
-        drawer = new FrameLayout(this); drawer.setBackgroundColor(0xFFFFFFFF); drawer.setElevation(dp(12));
-        LinearLayout drawerContent = new LinearLayout(this); drawerContent.setOrientation(LinearLayout.VERTICAL);
-        drawerContent.setPadding(dp(18), dp(18), dp(18), dp(18));
-        Button back = button("←  Back"); back.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        drawerContent.addView(back, params(-1, dp(48))); back.setOnClickListener(v -> toggleDrawer(false));
-        TextView menuHeading = sectionTitle("QuickDrop menu");
-        LinearLayout.LayoutParams mh = params(-1, -2); mh.topMargin = dp(24); drawerContent.addView(menuHeading, mh);
+        // Full-screen drawer overlay: the scrim closes on outside taps and blocks
+        // accidental interaction with the controls underneath it.
+        drawer = new FrameLayout(this);
+        drawer.setVisibility(View.GONE);
+        drawer.setClickable(true);
+        drawer.setFocusable(true);
+        drawerScrim = new View(this);
+        drawerScrim.setBackgroundColor(0x66000000);
+        drawerScrim.setOnClickListener(v -> toggleDrawer(false));
+        drawer.addView(drawerScrim, new FrameLayout.LayoutParams(-1, -1));
+
+        drawerPanel = new FrameLayout(this);
+        drawerPanel.setBackgroundColor(0xFFFFFFFF);
+        drawerPanel.setElevation(dp(12));
+        drawerPanel.setClickable(true);
+        drawerPanel.setFocusable(true);
+        LinearLayout drawerContent = new LinearLayout(this);
+        drawerContent.setOrientation(LinearLayout.VERTICAL);
+        drawerContent.setPadding(dp(18), dp(12), dp(18), dp(18));
+        LinearLayout drawerTop = new LinearLayout(this);
+        drawerTop.setGravity(Gravity.CENTER_VERTICAL);
+        Button back = new Button(this);
+        back.setText("‹"); back.setTextSize(30); back.setAllCaps(false);
+        back.setTextColor(0xFF263746); back.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        back.setMinWidth(0); back.setMinHeight(0); back.setPadding(0, 0, 0, 0);
+        drawerTop.addView(back, params(dp(42), dp(42)));
+        back.setOnClickListener(v -> toggleDrawer(false));
+        drawerContent.addView(drawerTop, params(-1, dp(48)));
         TextView storageTitle = sectionTitle("Storage folder");
-        LinearLayout.LayoutParams secLp = params(-1, -2); secLp.topMargin = dp(22); drawerContent.addView(storageTitle, secLp);
+        LinearLayout.LayoutParams secLp = params(-1, -2); secLp.topMargin = dp(18); drawerContent.addView(storageTitle, secLp);
         folderLabel = new TextView(this); folderLabel.setTextSize(13); folderLabel.setTextColor(0xFF526477);
         LinearLayout.LayoutParams folderLp = params(-1, -2); folderLp.topMargin = dp(6); drawerContent.addView(folderLabel, folderLp);
         Button chooseFolder = button("Choose a folder");
@@ -179,19 +202,29 @@ public class MainActivity extends Activity {
         openPanel = button("Open control panel");
         LinearLayout.LayoutParams panelLp = params(-1, dp(48)); panelLp.topMargin = dp(12); drawerContent.addView(openPanel, panelLp);
         openPanel.setOnClickListener(v -> { toggleDrawer(false); openControlPanel(); });
-        FrameLayout.LayoutParams drawerContentLp = new FrameLayout.LayoutParams(-1, -1); drawer.addView(drawerContent, drawerContentLp);
+        drawerPanel.addView(drawerContent, new FrameLayout.LayoutParams(-1, -1));
         int drawerWidth = Math.min(dp(320), (int)(getResources().getDisplayMetrics().widthPixels * 0.86f));
-        FrameLayout.LayoutParams drawerLp = new FrameLayout.LayoutParams(drawerWidth, -1, Gravity.RIGHT | Gravity.TOP);
-        drawer.setTranslationX(drawerWidth); shell.addView(drawer, drawerLp);
+        FrameLayout.LayoutParams panelFrameLp = new FrameLayout.LayoutParams(drawerWidth, -1, Gravity.RIGHT | Gravity.TOP);
+        drawerPanel.setTranslationX(drawerWidth);
+        drawer.addView(drawerPanel, panelFrameLp);
+        shell.addView(drawer, new FrameLayout.LayoutParams(-1, -1));
         setContentView(shell);
     }
 
     private void toggleDrawer(boolean show) {
         if (drawer == null || drawerOpen == show) return;
         drawerOpen = show;
-        float target = show ? 0f : drawer.getWidth();
-        if (drawer.getWidth() == 0) drawer.post(() -> drawer.animate().translationX(show ? 0f : drawer.getWidth()).setDuration(230).setInterpolator(new DecelerateInterpolator()).start());
-        else drawer.animate().translationX(target).setDuration(230).setInterpolator(new DecelerateInterpolator()).start();
+        if (show) drawer.setVisibility(View.VISIBLE);
+        float target = show ? 0f : drawerPanel.getWidth();
+        if (drawerPanel.getWidth() == 0) drawerPanel.post(() -> animateDrawer(show));
+        else animateDrawer(show);
+    }
+
+    private void animateDrawer(boolean show) {
+        drawerPanel.animate().translationX(show ? 0f : drawerPanel.getWidth())
+                .setDuration(220).setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> { if (!show && !drawerOpen) drawer.setVisibility(View.GONE); })
+                .start();
     }
 
     private void handleIncomingShare(Intent intent) {

@@ -11,6 +11,7 @@ import android.net.wifi.p2p.WifiP2pDevice;
 import android.net.wifi.p2p.WifiP2pDeviceList;
 import android.net.wifi.p2p.WifiP2pInfo;
 import android.net.wifi.p2p.WifiP2pManager;
+import android.net.wifi.WpsInfo;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.OpenableColumns;
@@ -101,7 +102,10 @@ public class WifiDirectController {
         if (manager == null || channel == null) { status("This device does not provide Android Wi-Fi Direct."); return; }
         try {
             manager.discoverPeers(channel, new WifiP2pManager.ActionListener() {
-                @Override public void onSuccess() { status("Searching for nearby QuickDrop devices… Keep QuickDrop open on both phones."); }
+                @Override public void onSuccess() {
+                    status("Searching for nearby Android devices… Discovery can take several seconds. Keep both phones unlocked with QuickDrop open.");
+                    main.postDelayed(WifiDirectController.this::requestPeers, 1800);
+                }
                 @Override public void onFailure(int reason) { status("Discovery failed: " + reasonText(reason) + ". Check Wi-Fi and Nearby devices permission."); }
             });
         } catch (SecurityException e) { status("Allow Nearby devices permission to discover phones."); }
@@ -111,10 +115,14 @@ public class WifiDirectController {
         if (device == null) return;
         WifiP2pConfig config = new WifiP2pConfig();
         config.deviceAddress = device.deviceAddress;
+        // Use push-button configuration explicitly. Prefer the selected peer as
+        // group owner so this phone can act as the sender in this initial flow.
+        config.wps.setup = WpsInfo.PBC;
+        config.groupOwnerIntent = 0;
         try {
             manager.connect(channel, config, new WifiP2pManager.ActionListener() {
-                @Override public void onSuccess() { status("Connection requested: " + device.deviceName + ". Accept the connection if Android asks."); }
-                @Override public void onFailure(int reason) { status("Could not connect: " + reasonText(reason)); }
+                @Override public void onSuccess() { status("Invitation sent to " + device.deviceName + ". Android may show a system connection approval on the other phone; keep both screens unlocked while they connect."); }
+                @Override public void onFailure(int reason) { status("Connection request was rejected by Android: " + reasonText(reason) + ". Wait a moment and try again on both phones."); }
             });
         } catch (SecurityException e) { status("Nearby devices permission is required."); }
     }

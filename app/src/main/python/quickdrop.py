@@ -851,9 +851,9 @@ PUBLIC_PAGE = HEAD + """
 </main><div id="toasts"></div><script>__JS__</script></body></html>"""
 
 ADMIN_PAGE = HEAD + """
-<header><div class="hin"><div class="head-actions" style="width:100%;justify-content:flex-end"><div class="pill" id="pill"><i></i><span id="pt">Waiting for a device</span></div>
-<button class="btn danger sm" id="stop">Stop sharing</button></div></div></header>
-<main class="admin-layout"><div class="admin-left">
+<main class="admin-layout">
+<div class="head-actions" style="width:100%;justify-content:flex-end;margin-bottom:12px"><div class="pill" id="pill"><i></i><span id="pt">Waiting for a device</span></div>
+<button class="btn danger sm" id="stop">Stop sharing</button></div><div class="admin-left">
 <section class="card"><div class="ch"><h2>Connect a device</h2><span class="hint">same Wi-Fi or hotspot</span></div>
 <div class="qrbox"><div class="qr">__QR__</div><div class="link">__URL__</div>
 <div class="row"><button class="btn ghost sm" id="copy">Copy link</button>
