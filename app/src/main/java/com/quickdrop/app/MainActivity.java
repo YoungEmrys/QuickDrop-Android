@@ -272,7 +272,7 @@ public class MainActivity extends Activity {
         folderLabel = new TextView(this); folderLabel.setTextSize(13); folderLabel.setTextColor(0xFF526477);
         LinearLayout.LayoutParams folderLp = params(-1, -2); folderLp.topMargin = dp(6); drawerContent.addView(folderLabel, folderLp);
         Button chooseFolder = button("Choose a folder");
-        LinearLayout.LayoutParams chooseLp = params(-1, dp(46)); chooseLp.topMargin = dp(9); drawerContent.addView(chooseFolder, chooseLp);
+        LinearLayout.LayoutParams drawerChooseLp = params(-1, dp(46)); drawerChooseLp.topMargin = dp(9); drawerContent.addView(chooseFolder, drawerChooseLp);
         chooseFolder.setOnClickListener(v -> { toggleDrawer(false); chooseFolder(); });
         openPanel = button("Open control panel");
         LinearLayout.LayoutParams panelLp = params(-1, dp(48)); panelLp.topMargin = dp(12); drawerContent.addView(openPanel, panelLp);
