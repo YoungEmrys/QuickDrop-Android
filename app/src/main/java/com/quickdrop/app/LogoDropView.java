@@ -23,7 +23,7 @@ public class LogoDropView extends View {
 
     public LogoDropView(Context context) {
         super(context);
-        logo = BitmapFactory.decodeResource(context.getResources(), R.drawable.quickdrop_logo);
+        logo = BitmapFactory.decodeResource(context.getResources(), R.drawable.quickdrop_animation);
         drop = Bitmap.createBitmap(logo, 184, 112, 144, 180);
         ripple = Bitmap.createBitmap(logo, 104, 280, 304, 112);
         setBackgroundColor(android.graphics.Color.TRANSPARENT);

@@ -23,6 +23,7 @@ import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -53,6 +54,7 @@ public class WifiDirectController {
     private volatile boolean connected = false;
     private volatile boolean groupOwner = false;
     private volatile String hostAddress;
+    private volatile String peerMacAddress;
     private volatile ServerSocket serverSocket;
     private volatile boolean closed = false;
 
@@ -81,7 +83,7 @@ public class WifiDirectController {
     }
 
     public boolean isConnected() { return connected; }
-    public boolean canSend() { return connected && !groupOwner; }
+    public boolean canSend() { return connected; }
     public List<WifiP2pDevice> getPeers() { return new ArrayList<>(peers); }
 
     public void register() {
@@ -117,6 +119,7 @@ public class WifiDirectController {
 
     public void connect(WifiP2pDevice device, boolean preferGroupOwner) {
         if (device == null) return;
+        peerMacAddress = device.deviceAddress;
         WifiP2pConfig config = new WifiP2pConfig();
         config.deviceAddress = device.deviceAddress;
         // Receiver mode strongly prefers this phone as group owner; sender mode
@@ -153,14 +156,23 @@ public class WifiDirectController {
         hostAddress = info.groupOwnerAddress == null ? null : info.groupOwnerAddress.getHostAddress();
         main.post(() -> listener.onConnected(true));
         status(groupOwner ? "Connected as group owner. This phone is ready to receive files from the other phone." : "Connected. You can now select files to send to the group owner.");
-        if (groupOwner) startReceiveServer();
+        // Both phones run a receive socket. This allows either phone to send,
+        // even when Android elects the sender as Wi-Fi Direct group owner.
+        startReceiveServer();
     }
 
     public void sendFiles(List<Uri> uris) {
-        if (!connected || groupOwner || hostAddress == null || uris == null || uris.isEmpty()) { status(groupOwner ? "This phone is the Wi-Fi Direct group owner and is currently receiving. Select files on the other phone to send here." : "Connect to a QuickDrop device first."); return; }
+        if (!connected || uris == null || uris.isEmpty()) { status("Connect to a QuickDrop device first and select at least one file."); return; }
         new Thread(() -> {
             try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(hostAddress, PORT), 15000);
+                String destination = groupOwner ? resolvePeerAddress() : hostAddress;
+                if (destination == null || destination.isEmpty()) throw new IllegalStateException("Could not locate the other phone on the Wi-Fi Direct link. Disconnect and reconnect both phones, then try again.");
+                IOException lastConnectError = null;
+                for (int attempt = 1; attempt <= 6; attempt++) {
+                    try { socket.connect(new InetSocketAddress(destination, PORT), 4000); lastConnectError = null; break; }
+                    catch (IOException e) { lastConnectError = e; try { Thread.sleep(700); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new IOException("Connection attempt interrupted", interrupted); } }
+                }
+                if (lastConnectError != null) throw lastConnectError;
                 DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
                 out.writeInt(MAGIC); out.writeInt(uris.size());
                 byte[] buffer = new byte[64 * 1024];
@@ -181,6 +193,51 @@ public class WifiDirectController {
             } catch (Exception e) { status("Wi-Fi Direct send failed: " + e.getMessage()); }
         }, "QuickDrop-WiFiDirect-Send").start();
         status("Sending files over Wi-Fi Direct…");
+    }
+
+    /** Resolve the connected P2P client when this phone is the group owner. */
+    private String resolvePeerAddress() {
+        // Android normally exposes the peer's P2P interface address in its ARP table
+        // after group formation. Match the MAC reported by WifiP2pDevice first.
+        String wanted = peerMacAddress == null ? "" : peerMacAddress.replace(":", "").toLowerCase(Locale.US);
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader("/proc/net/arp"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] cols = line.trim().split("\\s+");
+                if (cols.length >= 4) {
+                    String mac = cols[3].replace(":", "").toLowerCase(Locale.US);
+                    if (!wanted.isEmpty() && mac.equals(wanted) && !cols[0].equals(hostAddress)) return cols[0];
+                }
+            }
+        } catch (Exception ignored) { }
+        // Fallback: scan the Wi-Fi Direct /24 subnet for the QuickDrop receive port.
+        // This is used only when Android has not populated the ARP entry.
+        if (hostAddress != null && hostAddress.matches("\\d{1,3}(\\.\\d{1,3}){3}")) {
+            int dot = hostAddress.lastIndexOf('.');
+            String prefix = hostAddress.substring(0, dot + 1);
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(32);
+            java.util.concurrent.CompletionService<String> results = new java.util.concurrent.ExecutorCompletionService<>(pool);
+            int submitted = 0;
+            for (int i = 2; i <= 254; i++) {
+                final String ip = prefix + i;
+                if (ip.equals(hostAddress)) continue;
+                results.submit(() -> {
+                    try (Socket probe = new Socket()) {
+                        probe.connect(new InetSocketAddress(ip, PORT), 180);
+                        return ip;
+                    } catch (Exception e) { return null; }
+                });
+                submitted++;
+            }
+            try {
+                for (int i = 0; i < submitted; i++) {
+                    String found = results.take().get();
+                    if (found != null) { pool.shutdownNow(); return found; }
+                }
+            } catch (Exception ignored) { }
+            pool.shutdownNow();
+        }
+        return null;
     }
 
     private void startReceiveServer() {
@@ -216,6 +273,8 @@ public class WifiDirectController {
                             status("Received " + target.getName() + (mirrored ? " and copied to your selected shared folder." : " in QuickDrop storage."));
                         }
                         status("Incoming Wi-Fi Direct transfer completed.");
+                    } catch (java.io.EOFException ignored) {
+                        // Port probe from the peer-address fallback; no transfer was started.
                     } catch (Exception e) { status("Receive error: " + e.getMessage()); }
                 }
             } catch (Exception e) { if (connected && !closed) status("Could not start receiving: " + e.getMessage()); }

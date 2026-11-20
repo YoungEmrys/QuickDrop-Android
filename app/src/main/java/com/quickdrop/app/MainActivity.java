@@ -85,13 +85,17 @@ public class MainActivity extends Activity {
                     wifiProgress.setVisibility(busy ? View.VISIBLE : View.GONE);
                 }
                 if (message != null && (message.startsWith("Received ") || message.startsWith("Incoming Wi-Fi Direct transfer completed") || message.startsWith("Transfer completed"))) logoAnimation.setAnimating(false);
+                if (message != null && message.equals("Transfer completed successfully.")) {
+                    wifiSelectedFiles.clear();
+                    if (selectedFilesLabel != null) selectedFilesLabel.setText("No files selected");
+                }
             }
             @Override public void onPeers(java.util.List<android.net.wifi.p2p.WifiP2pDevice> peers) { showWifiDirectPeers(peers); }
             @Override public void onConnected(boolean connected) {
                 if (connected) {
                     logoAnimation.setAnimating(false);
-                    wifiDirectStatus.setText(wifiMode.equals("receive") ? "Connected · receiving ready" : (wifiDirect.canSend() ? "Connected · Select files to send" : "Connected · This phone is ready to receive"));
-                    if (wifiMode.equals("send") && wifiDirect.canSend() && !wifiSelectedFiles.isEmpty()) wifiDirect.sendFiles(new ArrayList<>(wifiSelectedFiles));
+                    wifiDirectStatus.setText(wifiMode.equals("receive") ? "Connected · receiving ready" : (wifiMode.equals("send") ? "Connected · Sending selected files" : "Connected · This phone is ready to receive"));
+                    if (wifiMode.equals("send") && !wifiSelectedFiles.isEmpty()) wifiDirect.sendFiles(new ArrayList<>(wifiSelectedFiles));
                 } else {
                     wifiPickerOpened = false;
                     if (!wifiMode.isEmpty()) logoAnimation.setAnimating(true);
@@ -186,7 +190,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams halfRight = new LinearLayout.LayoutParams(0, -1, 1f); halfRight.leftMargin = dp(5);
         wifiActions.addView(wifiSendButton, halfLeft); wifiActions.addView(wifiReceiveButton, halfRight);
         wifiSendButton.setOnClickListener(v -> {
-            if (!wifiSelectedFiles.isEmpty() && wifiDirect != null && wifiDirect.isConnected() && wifiDirect.canSend()) wifiDirect.sendFiles(new ArrayList<>(wifiSelectedFiles));
+            if (!wifiSelectedFiles.isEmpty() && wifiDirect != null && wifiDirect.isConnected()) wifiDirect.sendFiles(new ArrayList<>(wifiSelectedFiles));
             else startWifiMode("send");
         });
         wifiReceiveButton.setOnClickListener(v -> startWifiMode("receive"));
