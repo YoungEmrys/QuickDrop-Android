@@ -33,6 +33,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
 import android.widget.TextView;
+import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import androidx.documentfile.provider.DocumentFile;
@@ -43,6 +44,7 @@ public class MainActivity extends Activity {
     private static final int FILE_PICKER = 503;
     private static final int WIFI_DIRECT_PICKER = 505;
     private static final int WIFI_PERMISSION = 506;
+    private static final int WIFI_FILE_PICKER = 507;
     private android.webkit.ValueCallback<Uri[]> fileCallback;
     private final Handler handler = new Handler();
     private SharedPreferences prefs;
@@ -52,7 +54,10 @@ public class MainActivity extends Activity {
     private boolean drawerOpen = false;
     private TextView status, folderLabel, shareLink, errorText;
     private Button startStop, openPanel, wifiSendButton, wifiReceiveButton, menuButton;
-    private TextView wifiCardTitle, wifiDirectStatus;
+    private TextView wifiCardTitle, wifiDirectStatus, selectedFilesLabel;
+    private Button chooseWifiFilesButton;
+    private ProgressBar wifiProgress;
+    private final ArrayList<Uri> wifiSelectedFiles = new ArrayList<>();
     private LinearLayout wifiDeviceCard;
     private LogoDropView logoAnimation;
     private String wifiMode = "";
@@ -75,17 +80,18 @@ public class MainActivity extends Activity {
                 } else {
                     wifiDirectStatus.setText(message);
                 }
-                if (message != null && (message.startsWith("Received ") || message.startsWith("Incoming Wi-Fi Direct transfer completed"))) logoAnimation.setAnimating(false);
+                if (wifiProgress != null) {
+                    boolean busy = message != null && (message.startsWith("Searching") || message.startsWith("Invitation") || message.startsWith("Connecting") || message.startsWith("Sending") || message.startsWith("Receive error") || message.startsWith("Could not start receiving"));
+                    wifiProgress.setVisibility(busy ? View.VISIBLE : View.GONE);
+                }
+                if (message != null && (message.startsWith("Received ") || message.startsWith("Incoming Wi-Fi Direct transfer completed") || message.startsWith("Transfer completed"))) logoAnimation.setAnimating(false);
             }
             @Override public void onPeers(java.util.List<android.net.wifi.p2p.WifiP2pDevice> peers) { showWifiDirectPeers(peers); }
             @Override public void onConnected(boolean connected) {
                 if (connected) {
                     logoAnimation.setAnimating(false);
                     wifiDirectStatus.setText(wifiMode.equals("receive") ? "Connected · receiving ready" : (wifiDirect.canSend() ? "Connected · Select files to send" : "Connected · This phone is ready to receive"));
-                    if (wifiMode.equals("send") && wifiDirect.canSend() && !wifiPickerOpened) {
-                        wifiPickerOpened = true;
-                        handler.postDelayed(() -> chooseFilesForWifiDirect(), 350);
-                    }
+                    if (wifiMode.equals("send") && wifiDirect.canSend() && !wifiSelectedFiles.isEmpty()) wifiDirect.sendFiles(new ArrayList<>(wifiSelectedFiles));
                 } else {
                     wifiPickerOpened = false;
                     if (!wifiMode.isEmpty()) logoAnimation.setAnimating(true);
@@ -151,6 +157,26 @@ public class MainActivity extends Activity {
         wifiHint.setTextSize(13); wifiHint.setTextColor(0xFF526477);
         LinearLayout.LayoutParams wifiHintLp = params(-1, -2); wifiHintLp.topMargin = dp(5); root.addView(wifiHint, wifiHintLp);
 
+        // File selection and live activity indicator sit above the Send/Receive controls.
+        LinearLayout filePickerCard = new LinearLayout(this);
+        filePickerCard.setOrientation(LinearLayout.VERTICAL);
+        filePickerCard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        android.graphics.drawable.GradientDrawable pickerBg = new android.graphics.drawable.GradientDrawable();
+        pickerBg.setColor(0xFFFFFFFF); pickerBg.setCornerRadius(dp(14)); pickerBg.setStroke(dp(1), 0xFFE0E7EF);
+        filePickerCard.setBackground(pickerBg);
+        LinearLayout.LayoutParams pickerCardLp = params(-1, -2); pickerCardLp.topMargin = dp(12); root.addView(filePickerCard, pickerCardLp);
+        TextView pickerTitle = sectionTitle("Choose files to send");
+        filePickerCard.addView(pickerTitle, params(-1, -2));
+        selectedFilesLabel = new TextView(this);
+        selectedFilesLabel.setText("No files selected"); selectedFilesLabel.setTextSize(12); selectedFilesLabel.setTextColor(0xFF68798A);
+        LinearLayout.LayoutParams selectedLp = params(-1, -2); selectedLp.topMargin = dp(4); filePickerCard.addView(selectedFilesLabel, selectedLp);
+        chooseWifiFilesButton = button("Choose files");
+        LinearLayout.LayoutParams chooseLp = params(-1, dp(44)); chooseLp.topMargin = dp(8); filePickerCard.addView(chooseWifiFilesButton, chooseLp);
+        chooseWifiFilesButton.setOnClickListener(v -> chooseFilesForWifiDirect());
+        wifiProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        wifiProgress.setIndeterminate(true); wifiProgress.setVisibility(View.GONE);
+        LinearLayout.LayoutParams progressLp = params(-1, dp(4)); progressLp.topMargin = dp(10); filePickerCard.addView(wifiProgress, progressLp);
+
         LinearLayout wifiActions = new LinearLayout(this);
         wifiActions.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams actionsLp = params(-1, dp(50)); actionsLp.topMargin = dp(12); root.addView(wifiActions, actionsLp);
@@ -159,7 +185,10 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams halfLeft = new LinearLayout.LayoutParams(0, -1, 1f); halfLeft.rightMargin = dp(5);
         LinearLayout.LayoutParams halfRight = new LinearLayout.LayoutParams(0, -1, 1f); halfRight.leftMargin = dp(5);
         wifiActions.addView(wifiSendButton, halfLeft); wifiActions.addView(wifiReceiveButton, halfRight);
-        wifiSendButton.setOnClickListener(v -> startWifiMode("send"));
+        wifiSendButton.setOnClickListener(v -> {
+            if (!wifiSelectedFiles.isEmpty() && wifiDirect != null && wifiDirect.isConnected() && wifiDirect.canSend()) wifiDirect.sendFiles(new ArrayList<>(wifiSelectedFiles));
+            else startWifiMode("send");
+        });
         wifiReceiveButton.setOnClickListener(v -> startWifiMode("receive"));
 
         wifiCardTitle = sectionTitle("Choose Send or Receive");
@@ -364,6 +393,15 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        if (requestCode == WIFI_FILE_PICKER && resultCode == RESULT_OK && data != null) {
+            wifiSelectedFiles.clear();
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++) wifiSelectedFiles.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) wifiSelectedFiles.add(data.getData());
+            selectedFilesLabel.setText(wifiSelectedFiles.isEmpty() ? "No files selected" : wifiSelectedFiles.size() + " file(s) selected · Tap Send after connecting");
+            Toast.makeText(this, wifiSelectedFiles.size() + " file(s) selected", Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (requestCode == WIFI_DIRECT_PICKER && resultCode == RESULT_OK && data != null) {
             java.util.ArrayList<Uri> selected = new java.util.ArrayList<>();
             if (data.getClipData() != null) {
@@ -385,6 +423,7 @@ public class MainActivity extends Activity {
     private void startWifiMode(String mode) {
         wifiMode = mode;
         wifiPickerOpened = false;
+        if (wifiProgress != null) wifiProgress.setVisibility(View.VISIBLE);
         wifiCardTitle.setText(mode.equals("receive") ? "Sharing to you" : "Sending to nearby devices");
         wifiDirectStatus.setText(mode.equals("receive") ? "receiving ready" : "looking for devices");
         wifiDeviceCard.removeViews(1, Math.max(0, wifiDeviceCard.getChildCount() - 1));
@@ -393,8 +432,8 @@ public class MainActivity extends Activity {
         wifiSendButton.setAlpha(mode.equals("send") ? 1f : 0.72f);
         wifiReceiveButton.setAlpha(mode.equals("receive") ? 1f : 0.72f);
         if (wifiDirect != null && wifiDirect.isConnected()) {
-            if (mode.equals("send") && wifiDirect.canSend()) chooseFilesForWifiDirect();
-            else if (mode.equals("receive")) wifiDirectStatus.setText("receiving ready");
+            if (mode.equals("receive")) wifiDirectStatus.setText("receiving ready");
+            else if (wifiDirect.canSend()) wifiDirectStatus.setText(wifiSelectedFiles.isEmpty() ? "Connected · Choose files, then tap Send" : "Connected · Ready to send selected files");
             return;
         }
         ensureWifiDirectPermission();
@@ -430,6 +469,7 @@ public class MainActivity extends Activity {
             return;
         }
         logoAnimation.setAnimating(false);
+        if (wifiProgress != null) wifiProgress.setVisibility(View.GONE);
         wifiDirectStatus.setText(wifiMode.equals("receive") ? "Nearby device detected · Ready to receive" : "Select a nearby device to connect");
         for (android.net.wifi.p2p.WifiP2pDevice device : peers) {
             LinearLayout row = new LinearLayout(this);
@@ -461,7 +501,7 @@ public class MainActivity extends Activity {
         picker.addCategory(Intent.CATEGORY_OPENABLE); picker.setType("*/*");
         picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try { startActivityForResult(picker, WIFI_DIRECT_PICKER); }
+        try { startActivityForResult(picker, WIFI_FILE_PICKER); }
         catch (Exception e) { Toast.makeText(this, "No file picker is available.", Toast.LENGTH_SHORT).show(); }
     }
 
