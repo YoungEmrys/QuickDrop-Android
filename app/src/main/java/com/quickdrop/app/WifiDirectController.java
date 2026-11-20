@@ -62,6 +62,8 @@ public class WifiDirectController {
     private volatile boolean linkFormed = false;
     private volatile boolean handshakeComplete = false;
     private volatile boolean handshakeRunning = false;
+    private volatile boolean receiveServerRunning = false;
+    private volatile boolean receiveServerReady = false;
     private volatile boolean closed = false;
 
     public WifiDirectController(Activity activity, Listener listener) {
@@ -180,7 +182,24 @@ public class WifiDirectController {
         }
     }
 
+    /** Wait until the transfer socket is actually bound before declaring the QDD link ready. */
+    private boolean awaitReceiveServerReady(long timeoutMs) {
+        long deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs;
+        while (linkFormed && !closed && !receiveServerReady && android.os.SystemClock.elapsedRealtime() < deadline) {
+            try { Thread.sleep(100); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
+        }
+        return linkFormed && !closed && receiveServerReady;
+    }
+
     private void runHandshakeServer() {
+        try {
+            if (!awaitReceiveServerReady(5000)) throw new IOException("The file receiver did not become ready.");
+        } catch (Exception e) {
+            if (linkFormed && !closed) failHandshake("QuickDrop receiver startup failed: " + e.getMessage());
+            handshakeRunning = false;
+            return;
+        }
         try (ServerSocket server = new ServerSocket(HANDSHAKE_PORT)) {
             handshakeServerSocket = server;
             server.setSoTimeout(30000);
@@ -211,6 +230,7 @@ public class WifiDirectController {
 
     private void runHandshakeClient() {
         try {
+            if (!awaitReceiveServerReady(5000)) throw new IOException("The file receiver did not become ready.");
             if (hostAddress == null || hostAddress.isEmpty()) throw new IOException("Android did not provide the Wi-Fi Direct group address.");
             IOException last = null;
             for (int attempt = 1; attempt <= 12 && linkFormed && !closed; attempt++) {
@@ -333,44 +353,72 @@ public class WifiDirectController {
         return null;
     }
 
-    private void startReceiveServer() {
-        if (serverSocket != null && !serverSocket.isClosed()) return;
+    private synchronized void startReceiveServer() {
+        if (!linkFormed || closed || receiveServerRunning) return;
+        receiveServerRunning = true;
+        receiveServerReady = false;
         new Thread(() -> {
+            ServerSocket server = null;
             try {
-                ServerSocket server = new ServerSocket(PORT);
+                server = new ServerSocket(PORT);
+                server.setSoTimeout(1000);
                 serverSocket = server;
-                while (!closed && connected && !server.isClosed()) {
-                    try (Socket socket = server.accept()) {
-                        socket.setSoTimeout(120000);
-                        DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
-                        if (in.readInt() != MAGIC) throw new IllegalArgumentException("Unrecognized QuickDrop transfer.");
-                        int count = in.readInt();
-                        if (count < 1 || count > 100) throw new IllegalArgumentException("Invalid file count.");
-                        File folder = new File(activity.getFilesDir(), "QuickDrop");
-                        if (!folder.exists() && !folder.mkdirs()) throw new IllegalStateException("Cannot create receive folder.");
-                        for (int i = 0; i < count; i++) {
-                            String name = safeName(in.readUTF());
-                            long size = in.readLong();
-                            if (size < 0 || size > MAX_FILE_BYTES) throw new IllegalArgumentException("Invalid file size.");
-                            File target = uniqueFile(folder, name);
-                            try (FileOutputStream file = new FileOutputStream(target)) {
-                                byte[] buffer = new byte[64 * 1024]; long remaining = size;
-                                while (remaining > 0) {
-                                    int n = in.read(buffer, 0, (int)Math.min(buffer.length, remaining));
-                                    if (n < 0) throw new IllegalStateException("Transfer ended unexpectedly.");
-                                    file.write(buffer, 0, n); remaining -= n;
-                                }
-                                file.getFD().sync();
-                            }
-                            boolean mirrored = StorageBridge.exportFile(folder.getAbsolutePath(), target.getName());
-                            status("Received " + target.getName() + (mirrored ? " and copied to your selected shared folder." : " in QuickDrop storage."));
+                receiveServerReady = true;
+                status("QuickDrop file receiver is ready on this Wi-Fi Direct link.");
+                while (!closed && linkFormed && !server.isClosed()) {
+                    Socket accepted = null;
+                    try {
+                        accepted = server.accept();
+                        accepted.setSoTimeout(120000);
+                        if (!handshakeComplete || !connected) {
+                            status("A transfer connection arrived before QuickDrop verification; waiting for handshake.");
+                            continue;
                         }
-                        status("Incoming Wi-Fi Direct transfer completed.");
+                        try (Socket socket = accepted) {
+                            accepted = null;
+                            DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
+                            if (in.readInt() != MAGIC) throw new IllegalArgumentException("Unrecognized QuickDrop transfer.");
+                            int count = in.readInt();
+                            if (count < 1 || count > 100) throw new IllegalArgumentException("Invalid file count.");
+                            File folder = new File(activity.getFilesDir(), "QuickDrop");
+                            if (!folder.exists() && !folder.mkdirs()) throw new IllegalStateException("Cannot create receive folder.");
+                            for (int i = 0; i < count; i++) {
+                                String name = safeName(in.readUTF());
+                                long size = in.readLong();
+                                if (size < 0 || size > MAX_FILE_BYTES) throw new IllegalArgumentException("Invalid file size.");
+                                File target = uniqueFile(folder, name);
+                                try (FileOutputStream file = new FileOutputStream(target)) {
+                                    byte[] buffer = new byte[64 * 1024]; long remaining = size;
+                                    while (remaining > 0) {
+                                        int n = in.read(buffer, 0, (int)Math.min(buffer.length, remaining));
+                                        if (n < 0) throw new IllegalStateException("Transfer ended unexpectedly.");
+                                        file.write(buffer, 0, n); remaining -= n;
+                                    }
+                                    file.getFD().sync();
+                                }
+                                boolean mirrored = StorageBridge.exportFile(folder.getAbsolutePath(), target.getName());
+                                status("Received " + target.getName() + (mirrored ? " and copied to your selected shared folder." : " in QuickDrop storage."));
+                            }
+                            status("Incoming Wi-Fi Direct transfer completed.");
+                        }
+                    } catch (java.net.SocketTimeoutException timeout) {
+                        // Keep the listening socket alive while the P2P group remains formed.
                     } catch (java.io.EOFException ignored) {
-                        // Port probe from the peer-address fallback; no transfer was started.
-                    } catch (Exception e) { status("Receive error: " + e.getMessage()); }
+                        // An incomplete/aborted peer connection is not fatal to the listener.
+                    } catch (Exception e) {
+                        status("Receive error: " + e.getMessage());
+                    } finally {
+                        if (accepted != null) try { accepted.close(); } catch (Exception ignored) { }
+                    }
                 }
-            } catch (Exception e) { if (connected && !closed) status("Could not start receiving: " + e.getMessage()); }
+            } catch (Exception e) {
+                if (linkFormed && !closed) status("Could not start receiving on port " + PORT + ": " + e.getMessage());
+            } finally {
+                receiveServerReady = false;
+                receiveServerRunning = false;
+                if (serverSocket == server) serverSocket = null;
+                if (server != null) try { server.close(); } catch (Exception ignored) { }
+            }
         }, "QuickDrop-WiFiDirect-Receive").start();
     }
 
@@ -402,7 +450,11 @@ public class WifiDirectController {
         switch (r) { case WifiP2pManager.P2P_UNSUPPORTED: return "Wi-Fi Direct is not supported"; case WifiP2pManager.BUSY: return "Wi-Fi is busy; try again"; case WifiP2pManager.ERROR: return "system error"; default: return "error code " + r; }
     }
     private void status(String message) { main.post(() -> listener.onStatus(message)); }
-    private void closeServer() { try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) { } serverSocket = null; }
+    private void closeServer() {
+        receiveServerReady = false;
+        try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) { }
+        serverSocket = null;
+    }
     private void closeHandshakeServer() { try { if (handshakeServerSocket != null) handshakeServerSocket.close(); } catch (Exception ignored) { } handshakeServerSocket = null; }
     public void close() { closed = true; linkFormed = false; handshakeComplete = false; connected = false; closeServer(); closeHandshakeServer(); unregister(); }
 }
