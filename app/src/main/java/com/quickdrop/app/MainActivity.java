@@ -441,8 +441,8 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == com.journeyapps.barcodescanner.IntentIntegrator.REQUEST_CODE) {
-            com.google.zxing.integration.android.IntentResult scan = com.journeyapps.barcodescanner.IntentIntegrator.parseActivityResult(resultCode, data);
+        if (requestCode == com.google.zxing.integration.android.IntentIntegrator.REQUEST_CODE) {
+            com.google.zxing.integration.android.IntentResult scan = com.google.zxing.integration.android.IntentIntegrator.parseActivityResult(resultCode, data);
             if (scan != null) {
                 if (scan.getContents() == null) Toast.makeText(this, "QR scan cancelled.", Toast.LENGTH_SHORT).show();
                 else connectFromNativeQr(scan.getContents());
