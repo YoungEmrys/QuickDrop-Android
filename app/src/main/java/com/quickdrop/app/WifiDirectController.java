@@ -40,7 +40,9 @@ public class WifiDirectController {
     }
 
     private static final int PORT = 8988;
+    private static final int HANDSHAKE_PORT = 8989;
     private static final int MAGIC = 0x51444631; // QDF1
+    private static final int HANDSHAKE_MAGIC = 0x51444431; // QDD1
     private static final long MAX_FILE_BYTES = 2L * 1024 * 1024 * 1024;
     private final Activity activity;
     private final Listener listener;
@@ -56,6 +58,10 @@ public class WifiDirectController {
     private volatile String hostAddress;
     private volatile String peerMacAddress;
     private volatile ServerSocket serverSocket;
+    private volatile ServerSocket handshakeServerSocket;
+    private volatile boolean linkFormed = false;
+    private volatile boolean handshakeComplete = false;
+    private volatile boolean handshakeRunning = false;
     private volatile boolean closed = false;
 
     public WifiDirectController(Activity activity, Listener listener) {
@@ -146,19 +152,106 @@ public class WifiDirectController {
 
     private void handleConnection(WifiP2pInfo info) {
         if (info == null || !info.groupFormed) {
-            connected = false; hostAddress = null; closeServer();
+            linkFormed = false; handshakeComplete = false; connected = false;
+            hostAddress = null; closeServer(); closeHandshakeServer();
             main.post(() -> listener.onConnected(false));
             status("Not connected. Scan for a nearby device to begin.");
             return;
         }
-        connected = true;
+        linkFormed = true;
         groupOwner = info.isGroupOwner;
         hostAddress = info.groupOwnerAddress == null ? null : info.groupOwnerAddress.getHostAddress();
-        main.post(() -> listener.onConnected(true));
-        status(groupOwner ? "Connected as group owner. This phone is ready to receive files from the other phone." : "Connected. You can now select files to send to the group owner.");
-        // Both phones run a receive socket. This allows either phone to send,
-        // even when Android elects the sender as Wi-Fi Direct group owner.
+        connected = false;
+        handshakeComplete = false;
+        main.post(() -> listener.onConnected(false));
+        status("Wi-Fi Direct link formed. Verifying QuickDrop identity and receiver readiness…");
         startReceiveServer();
+        startHandshake();
+    }
+
+    /** QDD step 1: verify both apps can exchange a versioned handshake over the P2P link. */
+    private synchronized void startHandshake() {
+        if (!linkFormed || handshakeRunning || handshakeComplete || closed) return;
+        handshakeRunning = true;
+        if (groupOwner) {
+            new Thread(this::runHandshakeServer, "QuickDrop-QDD-Handshake-Server").start();
+        } else {
+            new Thread(this::runHandshakeClient, "QuickDrop-QDD-Handshake-Client").start();
+        }
+    }
+
+    private void runHandshakeServer() {
+        try (ServerSocket server = new ServerSocket(HANDSHAKE_PORT)) {
+            handshakeServerSocket = server;
+            server.setSoTimeout(30000);
+            status("Wi-Fi Direct link formed. Waiting for the other QuickDrop phone to identify itself…");
+            try (Socket socket = server.accept()) {
+                socket.setSoTimeout(10000);
+                DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
+                DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
+                int magic = in.readInt();
+                String protocol = in.readUTF();
+                String remoteId = in.readUTF();
+                String remoteName = in.readUTF();
+                String remoteMode = in.readUTF();
+                if (magic != HANDSHAKE_MAGIC || !"QDD".equals(protocol) || remoteId.isEmpty())
+                    throw new IOException("The nearby app did not send a valid QuickDrop handshake.");
+                out.writeInt(HANDSHAKE_MAGIC); out.writeUTF("QDD"); out.writeUTF("ACCEPTED");
+                out.writeUTF(android.os.Build.MODEL == null ? "Android" : android.os.Build.MODEL);
+                out.flush();
+                completeHandshake("Connected securely to " + remoteName + ". QuickDrop handshake verified.");
+            }
+        } catch (Exception e) {
+            if (linkFormed && !closed) failHandshake("QuickDrop handshake failed: " + e.getMessage());
+        } finally {
+            handshakeServerSocket = null;
+            handshakeRunning = false;
+        }
+    }
+
+    private void runHandshakeClient() {
+        try {
+            if (hostAddress == null || hostAddress.isEmpty()) throw new IOException("Android did not provide the Wi-Fi Direct group address.");
+            IOException last = null;
+            for (int attempt = 1; attempt <= 12 && linkFormed && !closed; attempt++) {
+                try (Socket socket = new Socket()) {
+                    socket.connect(new InetSocketAddress(hostAddress, HANDSHAKE_PORT), 2500);
+                    socket.setSoTimeout(8000);
+                    DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
+                    DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
+                    String id = android.provider.Settings.Secure.getString(activity.getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+                    if (id == null) id = "android-device";
+                    out.writeInt(HANDSHAKE_MAGIC); out.writeUTF("QDD"); out.writeUTF(id);
+                    out.writeUTF(android.os.Build.MODEL == null ? "Android" : android.os.Build.MODEL);
+                    out.writeUTF("peer"); out.flush();
+                    int magic = in.readInt(); String protocol = in.readUTF();
+                    String result = in.readUTF(); String remoteName = in.readUTF();
+                    if (magic != HANDSHAKE_MAGIC || !"QDD".equals(protocol) || !"ACCEPTED".equals(result))
+                        throw new IOException("The other phone rejected the QuickDrop handshake.");
+                    completeHandshake("Connected to " + remoteName + ". QuickDrop handshake verified.");
+                    return;
+                } catch (IOException e) {
+                    last = e;
+                    try { Thread.sleep(650); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
+                }
+            }
+            if (last != null) throw last;
+        } catch (Exception e) {
+            if (linkFormed && !closed) failHandshake("Could not verify the other QuickDrop phone: " + e.getMessage());
+        } finally { handshakeRunning = false; }
+    }
+
+    private void completeHandshake(String message) {
+        if (!linkFormed || closed) return;
+        handshakeComplete = true; connected = true;
+        status(message);
+        main.post(() -> listener.onConnected(true));
+    }
+
+    private void failHandshake(String message) {
+        handshakeComplete = false; connected = false;
+        status(message + " Disconnect and retry with both phones open and unlocked.");
+        main.post(() -> listener.onConnected(false));
     }
 
     public void sendFiles(List<Uri> uris) {
@@ -310,5 +403,6 @@ public class WifiDirectController {
     }
     private void status(String message) { main.post(() -> listener.onStatus(message)); }
     private void closeServer() { try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) { } serverSocket = null; }
-    public void close() { closed = true; connected = false; closeServer(); unregister(); }
+    private void closeHandshakeServer() { try { if (handshakeServerSocket != null) handshakeServerSocket.close(); } catch (Exception ignored) { } handshakeServerSocket = null; }
+    public void close() { closed = true; linkFormed = false; handshakeComplete = false; connected = false; closeServer(); closeHandshakeServer(); unregister(); }
 }

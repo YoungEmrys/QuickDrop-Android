@@ -91,3 +91,8 @@ This is the first Wi-Fi Direct transfer pass and currently supports transfer fro
 - Added a slow looping QuickDrop water-drop animation with a small ripple pulse. It stops when a peer is found, a connection is formed, or a file is received.
 - Wi-Fi Direct connection requests now use a group-owner preference based on the selected mode; Android still controls the final group-owner negotiation.
 
+
+
+## Stage 1.11 — QuickDrop Direct handshake (connection validation)
+
+This stage adds a separate QDD v1 handshake on TCP port 8989 after Android reports that the Wi-Fi Direct group has formed. The group owner listens; the group client connects to the group-owner address. Both sides exchange a protocol marker, device identity/name and an acceptance response before the app reports the QuickDrop connection as verified. The existing file-transfer channel on port 8988 is intentionally unchanged in this step; bidirectional transfer will be redesigned after handshake reliability is tested.
