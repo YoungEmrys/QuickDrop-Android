@@ -35,6 +35,8 @@ import java.util.ArrayList;
 import android.widget.TextView;
 import android.widget.ProgressBar;
 import android.widget.Toast;
+import android.widget.EditText;
+import android.app.AlertDialog;
 
 import androidx.documentfile.provider.DocumentFile;
 
@@ -66,6 +68,9 @@ public class MainActivity extends Activity {
     private CheckBox keepRunning;
     private WebView webView;
     private boolean panelVisible = false;
+    private NativeHotspotController nativeHotspot;
+    private TextView nativeStatus, nativeHostDetails;
+    private Button createNativeButton, connectNativeButton, disconnectNativeButton;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -100,6 +105,16 @@ public class MainActivity extends Activity {
                     wifiPickerOpened = false;
                     if (!wifiMode.isEmpty()) logoAnimation.setAnimating(true);
                 }
+            }
+        });
+        nativeHotspot = new NativeHotspotController(this, new NativeHotspotController.Listener() {
+            @Override public void onStatus(String message) { if (nativeStatus != null) nativeStatus.setText(message); }
+            @Override public void onHostDetails(String ssid, String password, String address, int port) {
+                if (nativeHostDetails != null) { nativeHostDetails.setText("Hotspot name: " + ssid + "\nPassword: " + (password == null || password.isEmpty() ? "Not required" : password) + "\nSender address: " + address + ":" + port + "\nShare these details with the receiving QuickDrop phone."); nativeHostDetails.setVisibility(View.VISIBLE); }
+            }
+            @Override public void onConnected(boolean connected, String message) {
+                if (nativeStatus != null) nativeStatus.setText(message);
+                if (disconnectNativeButton != null) disconnectNativeButton.setVisibility(connected ? View.VISIBLE : View.GONE);
             }
         });
         refreshUi();
@@ -213,6 +228,26 @@ public class MainActivity extends Activity {
         TextView wifiDirectFootnote = new TextView(this);
         wifiDirectFootnote.setText("Keep both phones unlocked with QuickDrop open while connecting."); wifiDirectFootnote.setTextSize(11); wifiDirectFootnote.setTextColor(0xFF8190A0);
         LinearLayout.LayoutParams footLp = params(-1, -2); footLp.topMargin = dp(4); wifiDeviceCard.addView(wifiDirectFootnote, footLp);
+
+        // Separate native hotspot mode. Wi-Fi Direct above remains untouched.
+        TextView nativeTitle = sectionTitle("Native Hotspot Sharing (QuickDrop to QuickDrop)");
+        LinearLayout.LayoutParams nativeTitleLp = params(-1, -2); nativeTitleLp.topMargin = dp(26); root.addView(nativeTitle, nativeTitleLp);
+        TextView nativeHint = new TextView(this);
+        nativeHint.setText("Connect two Android phones directly over a private local hotspot. This is separate from Browser Sharing and Wi-Fi Direct.");
+        nativeHint.setTextSize(13); nativeHint.setTextColor(0xFF526477);
+        LinearLayout.LayoutParams nativeHintLp = params(-1, -2); nativeHintLp.topMargin = dp(5); root.addView(nativeHint, nativeHintLp);
+        LinearLayout nativeCard = new LinearLayout(this); nativeCard.setOrientation(LinearLayout.VERTICAL); nativeCard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        android.graphics.drawable.GradientDrawable nativeBg = new android.graphics.drawable.GradientDrawable(); nativeBg.setColor(0xFFFFFFFF); nativeBg.setCornerRadius(dp(14)); nativeBg.setStroke(dp(1), 0xFFE0E7EF); nativeCard.setBackground(nativeBg);
+        LinearLayout.LayoutParams nativeCardLp = params(-1, -2); nativeCardLp.topMargin = dp(9); root.addView(nativeCard, nativeCardLp);
+        nativeStatus = new TextView(this); nativeStatus.setText("Not connected · Choose Create Connection or Connect to Sender"); nativeStatus.setTextSize(13); nativeStatus.setTextColor(0xFF526477); nativeCard.addView(nativeStatus, params(-1, -2));
+        nativeHostDetails = new TextView(this); nativeHostDetails.setTextSize(12); nativeHostDetails.setTextColor(0xFF18324A); nativeHostDetails.setTextIsSelectable(true); nativeHostDetails.setVisibility(View.GONE);
+        LinearLayout.LayoutParams hostDetailsLp = params(-1, -2); hostDetailsLp.topMargin = dp(8); nativeCard.addView(nativeHostDetails, hostDetailsLp);
+        createNativeButton = button("Create Connection"); LinearLayout.LayoutParams createLp = params(-1, dp(46)); createLp.topMargin = dp(10); nativeCard.addView(createNativeButton, createLp);
+        connectNativeButton = button("Connect to Sender"); LinearLayout.LayoutParams connectLp = params(-1, dp(46)); connectLp.topMargin = dp(8); nativeCard.addView(connectNativeButton, connectLp);
+        disconnectNativeButton = button("Disconnect"); LinearLayout.LayoutParams disconnectLp = params(-1, dp(42)); disconnectLp.topMargin = dp(8); nativeCard.addView(disconnectNativeButton, disconnectLp); disconnectNativeButton.setVisibility(View.GONE);
+        createNativeButton.setOnClickListener(v -> requestNativePermissionThenHost());
+        connectNativeButton.setOnClickListener(v -> showNativeConnectDialog());
+        disconnectNativeButton.setOnClickListener(v -> { if (nativeHotspot != null) nativeHotspot.disconnect(); if (nativeHostDetails != null) nativeHostDetails.setVisibility(View.GONE); });
 
         errorText = new TextView(this); errorText.setTextColor(0xFFB42318); errorText.setTextSize(12);
         LinearLayout.LayoutParams errLp = params(-1, -2); errLp.topMargin = dp(10); root.addView(errorText, errLp);
@@ -452,14 +487,34 @@ public class MainActivity extends Activity {
         if (wifiDirect != null) wifiDirect.discover(wifiMode.equals("receive"));
     }
 
+    private void requestNativePermissionThenHost() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.NEARBY_WIFI_DEVICES") != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{"android.permission.NEARBY_WIFI_DEVICES"}, 508); return;
+        }
+        if (nativeHostDetails != null) { nativeHostDetails.setVisibility(View.VISIBLE); nativeHostDetails.setText("Starting private hotspot…"); }
+        if (nativeHotspot != null) nativeHotspot.createConnection();
+    }
+
+    private void showNativeConnectDialog() {
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(20), dp(8), dp(20), 0);
+        EditText ssid = new EditText(this); ssid.setSingleLine(true); ssid.setHint("Sender hotspot name (SSID)"); form.addView(ssid, params(-1, dp(52)));
+        EditText password = new EditText(this); password.setSingleLine(true); password.setHint("Hotspot password"); password.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD); form.addView(password, params(-1, dp(52)));
+        new AlertDialog.Builder(this).setTitle("Connect to a QuickDrop sender").setMessage("Enter the hotspot name and password displayed on the sender phone. Android will ask you to approve the Wi-Fi connection.").setView(form).setNegativeButton("Cancel", (d, w) -> {}).setPositiveButton("Connect", (d, w) -> {
+            if (nativeHostDetails != null) nativeHostDetails.setVisibility(View.GONE);
+            if (nativeHotspot != null) nativeHotspot.connectToSender(ssid.getText().toString().trim(), password.getText().toString());
+        }).show();
+    }
+
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 508) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) requestNativePermissionThenHost();
+            else if (nativeStatus != null) nativeStatus.setText("Nearby Wi-Fi permission is required for native hotspot sharing. Browser Sharing and Wi-Fi Direct are unaffected.");
+            return;
+        }
         if (requestCode == WIFI_PERMISSION) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                if (wifiDirect != null) wifiDirect.discover(wifiMode.equals("receive"));
-            } else {
-                wifiDirectStatus.setText("Nearby devices permission is needed for Wi-Fi Direct. Browser sharing still works without it.");
-            }
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) { if (wifiDirect != null) wifiDirect.discover(wifiMode.equals("receive")); }
+            else wifiDirectStatus.setText("Nearby devices permission is needed for Wi-Fi Direct. Browser sharing still works without it.");
         }
     }
 
@@ -582,6 +637,7 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(poll);
         if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
         if (wifiDirect != null) wifiDirect.close();
+        if (nativeHotspot != null) nativeHotspot.stop();
         super.onDestroy();
     }
 }

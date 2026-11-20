@@ -96,3 +96,15 @@ This is the first Wi-Fi Direct transfer pass and currently supports transfer fro
 ## Stage 1.11 — QuickDrop Direct handshake (connection validation)
 
 This stage adds a separate QDD v1 handshake on TCP port 8989 after Android reports that the Wi-Fi Direct group has formed. The group owner listens; the group client connects to the group-owner address. Both sides exchange a protocol marker, device identity/name and an acceptance response before the app reports the QuickDrop connection as verified. The existing file-transfer channel on port 8988 is intentionally unchanged in this step; bidirectional transfer will be redesigned after handshake reliability is tested.
+
+## Stage 1.12 — Native local-hotspot connection (initial connection test)
+
+- Added a separate **Native Hotspot Sharing** section with **Create Connection**, **Connect to Sender**, and **Disconnect** controls.
+- Sender uses Android `LocalOnlyHotspot`; receiver uses Android `WifiNetworkSpecifier` (Android 10+).
+- The phones perform a small QuickDrop protocol handshake on TCP port 8989 before showing the connection as verified.
+- This is separate from the existing browser server and Wi-Fi Direct implementation. Wi-Fi Direct source and controls are intentionally unchanged.
+- This stage validates the native connection only. Existing Android Sharesheet imports still behave as before; automatic native file transmission will be implemented after connection testing is successful.
+- Receiver currently enters the sender's hotspot SSID/password manually. Android displays its own approval prompt when joining.
+- Android 8–9 can create a local hotspot but this first receiver implementation requires Android 10 or later.
+
+Testing note: build with the repository's GitHub Actions workflow. A successful CI build does not by itself verify that two physical phones can establish the local-only hotspot connection; test on two Android devices.
