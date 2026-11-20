@@ -25,6 +25,7 @@ import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -58,6 +59,7 @@ public final class NativeHotspotController {
     private volatile DataOutputStream peerOut;
     private volatile boolean closed;
     private volatile boolean connected;
+    private volatile boolean hosting;
     private String hostAddress = "";
 
     public NativeHotspotController(Context context, Listener listener) {
@@ -68,7 +70,8 @@ public final class NativeHotspotController {
     public void createConnection() {
         if (Build.VERSION.SDK_INT < 26) { status("Native hotspot sharing requires Android 8.0 or later."); return; }
         if (reservation != null) { status("Connection hotspot is already active."); return; }
-        closed = false;
+        closed = false; hosting = true;
+        startConnectionService();
         status("Requesting a private QuickDrop hotspot…");
         WifiManager wifi = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         try {
@@ -107,7 +110,7 @@ public final class NativeHotspotController {
                 status("Hotspot ready · Waiting for receiver");
                 while (!closed && !serverSocket.isClosed()) {
                     Socket socket = serverSocket.accept();
-                    socket.setSoTimeout(0);
+                    socket.setSoTimeout(20000); socket.setKeepAlive(true);
                     DataInputStream in = new DataInputStream(socket.getInputStream());
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                     String hello = in.readUTF();
@@ -121,31 +124,35 @@ public final class NativeHotspotController {
     }
 
     public void connectToSender(String ssid, String password) {
+        connectToSender(ssid, password, "", PORT);
+    }
+
+    public void connectToSender(String ssid, String password, String senderAddress, int senderPort) {
         if (Build.VERSION.SDK_INT < 29) { status("Automatic native connection requires Android 10 or later. Use Browser Sharing on this phone."); return; }
         if (TextUtils.isEmpty(ssid)) { status("Enter the sender's hotspot name (SSID)."); return; }
         if (networkCallback != null) { status("A sender connection request is already active."); return; }
-        closed = false; status("Requesting Android permission to join " + ssid + "…");
+        closed = false; hosting = false; startConnectionService(); status("Requesting Android permission to join " + ssid + "…");
         WifiNetworkSpecifier.Builder spec = new WifiNetworkSpecifier.Builder().setSsid(ssid);
         if (!TextUtils.isEmpty(password)) spec.setWpa2Passphrase(password);
         NetworkRequest request = new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).setNetworkSpecifier(spec.build()).build();
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
                 connectivity.bindProcessToNetwork(network);
-                String gateway = gatewayFor(network);
+                String gateway = TextUtils.isEmpty(senderAddress) ? gatewayFor(network) : senderAddress;
                 if (TextUtils.isEmpty(gateway)) { status("Joined hotspot, but could not identify the sender address."); return; }
                 status("Connected to hotspot · Verifying QuickDrop on the other phone…");
-                io.execute(() -> verifyPeer(gateway));
+                io.execute(() -> verifyPeer(gateway, senderPort > 0 ? senderPort : PORT));
             }
             @Override public void onUnavailable() { status("Android could not join that hotspot. Check the name/password and try again."); clearNetworkRequest(false); }
-            @Override public void onLost(Network network) { connected = false; closePeer(); main.post(() -> listener.onConnected(false, "Sender hotspot connection was lost.")); }
+            @Override public void onLost(Network network) { connected = false; closePeer(); clearNetworkRequest(true); hosting = false; stopConnectionService(); main.post(() -> listener.onConnected(false, "Sender hotspot connection was lost. Scan the QR code again to reconnect.")); }
         };
         try { connectivity.requestNetwork(request, networkCallback); }
         catch (Exception e) { status("Could not request hotspot connection: " + e.getMessage()); clearNetworkRequest(false); }
     }
 
-    private void verifyPeer(String gateway) {
+    private void verifyPeer(String gateway, int port) {
         try {
-            Socket socket = new Socket(); socket.connect(new java.net.InetSocketAddress(gateway, PORT), 10000); socket.setSoTimeout(0);
+            Socket socket = new Socket(); socket.connect(new java.net.InetSocketAddress(gateway, port), 10000); socket.setSoTimeout(20000); socket.setKeepAlive(true);
             DataOutputStream out = new DataOutputStream(socket.getOutputStream()); DataInputStream in = new DataInputStream(socket.getInputStream());
             out.writeUTF("QDHOTSPOT:2"); out.flush();
             if (!"QDHOTSPOT-OK:2".equals(in.readUTF())) throw new Exception("The device did not respond as a compatible QuickDrop sender.");
@@ -160,16 +167,24 @@ public final class NativeHotspotController {
     }
 
     private void readPeerLoop(Socket socket, DataInputStream in) {
+        int missedHeartbeats = 0;
         try {
             while (!closed && !socket.isClosed()) {
-                String command = in.readUTF();
-                if ("FILES".equals(command)) receiveFiles(in);
-                else if ("PING".equals(command)) { /* reserved keepalive */ }
+                final String command;
+                try { command = in.readUTF(); }
+                catch (SocketTimeoutException timeout) {
+                    if (++missedHeartbeats >= 3) throw new Exception("Peer stopped responding. The other phone may have closed QuickDrop or left the connection.");
+                    synchronized (writeLock) { DataOutputStream out = peerOut; if (out != null && peerSocket == socket) { out.writeUTF("PING"); out.flush(); } }
+                    continue;
+                }
+                if ("FILES".equals(command)) { missedHeartbeats = 0; receiveFiles(in); }
+                else if ("PING".equals(command)) { synchronized (writeLock) { if (peerOut != null && peerSocket == socket) { peerOut.writeUTF("PONG"); peerOut.flush(); } } }
+                else if ("PONG".equals(command)) missedHeartbeats = 0;
                 else throw new Exception("Unknown transfer command.");
             }
         } catch (Exception e) { if (!closed) status("Peer connection ended: " + e.getMessage()); }
         finally {
-            if (peerSocket == socket) { connected = false; closePeer(); main.post(() -> listener.onConnected(false, "Peer disconnected · Hotspot is still available")); }
+            if (peerSocket == socket) { connected = false; closePeer(); clearNetworkRequest(true); if (!hosting) stopConnectionService(); main.post(() -> listener.onConnected(false, "Peer disconnected · Hotspot is still available. Reconnect to continue.")); }
             try { socket.close(); } catch (Exception ignored) {}
         }
     }
@@ -263,7 +278,15 @@ public final class NativeHotspotController {
         closed=true; connected=false; closePeer();
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
         if (reservation != null) { try { reservation.close(); } catch (Exception ignored) {} reservation=null; }
-        clearNetworkRequest(true); main.post(() -> listener.onConnected(false,"Not connected"));
+        clearNetworkRequest(true); hosting = false; stopConnectionService(); main.post(() -> listener.onConnected(false,"Not connected"));
+    }
+    private void startConnectionService() {
+        try { context.startForegroundService(new android.content.Intent(context, NativeConnectionService.class).setAction(NativeConnectionService.ACTION_START)); }
+        catch (Exception e) { status("Could not start the background connection service: " + e.getMessage()); }
+    }
+    private void stopConnectionService() {
+        try { context.startService(new android.content.Intent(context, NativeConnectionService.class).setAction(NativeConnectionService.ACTION_STOP)); }
+        catch (Exception ignored) {}
     }
     private void clearNetworkRequest(boolean unbind) {
         if (networkCallback != null) { try { connectivity.unregisterNetworkCallback(networkCallback); } catch (Exception ignored) {} networkCallback=null; }

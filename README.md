@@ -120,3 +120,12 @@ This stage extends the separate native Android-to-Android hotspot connection. Wi
 - Native transfer protocol version is now 2. Both phones must run this version for native file transfer. Browser Sharing and Wi-Fi Direct remain independent.
 
 Initial limits: up to 100 files per selection and 2 GiB per file. Test on real devices for large files, interrupted transfers, reconnects, and selected-folder mirroring before relying on it for important data.
+
+## Stage 1.14 — Receiver QR scanning and connection health
+
+- Added **Scan Sender QR Code** to the native connection card. The receiver scans the sender's Stage 1.13+ QR code, reviews the sender SSID/address, and then requests Android's Wi-Fi approval. After approval, QuickDrop connects to the sender address and transfer port from the QR payload.
+- Added socket keepalive and PING/PONG heartbeat checks. If a peer stops responding, both sides transition out of the connected state rather than leaving the sender displaying a stale active connection indefinitely. A lost receiver network request is also unbound and released so a fresh scan can reconnect.
+- Added a dedicated `connectedDevice` foreground service while native hotspot/peer sharing is active. This gives Android an explicit ongoing connection task when the user switches to another app and displays a persistent QuickDrop notification. The service stops when the native session ends.
+- The scanner uses the camera permission requested by the scanning component. Camera access is used only for scanning the QR code.
+- Background network behavior can still vary by Android version and device firmware. Verify by switching to another app for at least one minute on both phones, then return to QuickDrop and check that both sides still show connected and can transfer a file.
+- Browser Sharing and Wi-Fi Direct are unchanged. The native protocol remains version 2, so both phones should use the same current QuickDrop build.

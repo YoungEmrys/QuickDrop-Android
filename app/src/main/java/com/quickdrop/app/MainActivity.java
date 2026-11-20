@@ -76,6 +76,7 @@ public class MainActivity extends Activity {
     private TextView nativeStatus, nativeHostDetails;
     private Button createNativeButton, connectNativeButton, disconnectNativeButton, nativePickFilesButton, nativeQrButton;
     private static final int NATIVE_FILE_PICKER = 509;
+    private static final int NATIVE_QR_SCAN = 510;
     private String nativeQrPayload = "";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
@@ -258,6 +259,8 @@ public class MainActivity extends Activity {
         connectNativeButton = button("Connect to Sender"); LinearLayout.LayoutParams connectLp = params(-1, dp(46)); connectLp.topMargin = dp(8); nativeCard.addView(connectNativeButton, connectLp);
         disconnectNativeButton = button("Disconnect"); LinearLayout.LayoutParams disconnectLp = params(-1, dp(42)); disconnectLp.topMargin = dp(8); nativeCard.addView(disconnectNativeButton, disconnectLp); disconnectNativeButton.setVisibility(View.GONE);
         nativeQrButton = button("Show Connection QR Code"); LinearLayout.LayoutParams qrLp = params(-1, dp(44)); qrLp.topMargin = dp(8); nativeCard.addView(nativeQrButton, qrLp); nativeQrButton.setVisibility(View.GONE);
+        Button scanNativeQrButton = button("Scan Sender QR Code"); LinearLayout.LayoutParams scanQrLp = params(-1, dp(44)); scanQrLp.topMargin = dp(8); nativeCard.addView(scanNativeQrButton, scanQrLp);
+        scanNativeQrButton.setOnClickListener(v -> scanNativeQrCode());
         nativePickFilesButton = button("Choose Files to Send"); LinearLayout.LayoutParams nativePickLp = params(-1, dp(46)); nativePickLp.topMargin = dp(8); nativeCard.addView(nativePickFilesButton, nativePickLp); nativePickFilesButton.setEnabled(false);
         createNativeButton.setOnClickListener(v -> requestNativePermissionThenHost());
         connectNativeButton.setOnClickListener(v -> showNativeConnectDialog());
@@ -438,6 +441,14 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == com.journeyapps.barcodescanner.IntentIntegrator.REQUEST_CODE) {
+            com.google.zxing.integration.android.IntentResult scan = com.journeyapps.barcodescanner.IntentIntegrator.parseActivityResult(resultCode, data);
+            if (scan != null) {
+                if (scan.getContents() == null) Toast.makeText(this, "QR scan cancelled.", Toast.LENGTH_SHORT).show();
+                else connectFromNativeQr(scan.getContents());
+            }
+            return;
+        }
         if (requestCode == NATIVE_FILE_PICKER && resultCode == RESULT_OK && data != null) {
             ArrayList<Uri> selected = new ArrayList<>();
             if (data.getClipData() != null) { for (int i = 0; i < data.getClipData().getItemCount(); i++) selected.add(data.getClipData().getItemAt(i).getUri()); }
@@ -530,6 +541,38 @@ public class MainActivity extends Activity {
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try { startActivityForResult(intent, NATIVE_FILE_PICKER); }
         catch (Exception e) { Toast.makeText(this, "Unable to open file picker.", Toast.LENGTH_SHORT).show(); }
+    }
+
+    private void scanNativeQrCode() {
+        try {
+            com.google.zxing.integration.android.IntentIntegrator scanner = new com.google.zxing.integration.android.IntentIntegrator(this);
+            scanner.setDesiredBarcodeFormats(com.google.zxing.integration.android.IntentIntegrator.QR_CODE);
+            scanner.setPrompt("Scan the QR code shown on the sender's QuickDrop app");
+            scanner.setBeepEnabled(false);
+            scanner.setOrientationLocked(false);
+            scanner.initiateScan();
+        } catch (Exception e) {
+            Toast.makeText(this, "Unable to open QR scanner: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void connectFromNativeQr(String payload) {
+        try {
+            String[] parts = payload.split("\\|", -1);
+            if (parts.length != 6 || !"QDHOTSPOT".equals(parts[0]) || !"2".equals(parts[1]) || parts[2].isEmpty() || parts[4].isEmpty())
+                throw new IllegalArgumentException("This is not a valid QuickDrop connection QR code.");
+            int port = Integer.parseInt(parts[5]);
+            if (port < 1 || port > 65535) throw new IllegalArgumentException("Invalid sender port.");
+            String details = "Sender: " + parts[2] + "\nAddress: " + parts[4] + ":" + port + "\n\nAndroid will now ask you to approve joining this private hotspot.";
+            new AlertDialog.Builder(this).setTitle("Connect to QuickDrop sender?").setMessage(details)
+                    .setNegativeButton("Cancel", (d, w) -> {})
+                    .setPositiveButton("Connect", (d, w) -> {
+                        if (nativeHostDetails != null) nativeHostDetails.setVisibility(View.GONE);
+                        if (nativeHotspot != null) nativeHotspot.connectToSender(parts[2], parts[3], parts[4], port);
+                    }).show();
+        } catch (Exception e) {
+            Toast.makeText(this, e.getMessage() == null ? "Could not read this QR code." : e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void showNativeQrCode() {
