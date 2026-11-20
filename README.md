@@ -108,3 +108,15 @@ This stage adds a separate QDD v1 handshake on TCP port 8989 after Android repor
 - Android 8–9 can create a local hotspot but this first receiver implementation requires Android 10 or later.
 
 Testing note: build with the repository's GitHub Actions workflow. A successful CI build does not by itself verify that two physical phones can establish the local-only hotspot connection; test on two Android devices.
+
+## Stage 1.13 — Native Hotspot File Transfer and QR
+
+This stage extends the separate native Android-to-Android hotspot connection. Wi-Fi Direct and the existing browser-sharing server remain separate and are not changed by this feature.
+
+- Once connected, either phone can use **Choose Files to Send** to select one or multiple files through Android's document picker.
+- Files received over the native link are saved in QuickDrop's app-private `QuickDrop` folder and mirrored to the selected shared folder when one is configured.
+- Android Sharesheet imports are sent directly to the connected QuickDrop peer; when no native peer is connected, the existing local import behavior is retained.
+- The sender can generate a QR code containing the hotspot name, password, address, and native transfer port. A QR reader can display those details; the receiver currently enters the SSID/password in **Connect to Sender**.
+- Native transfer protocol version is now 2. Both phones must run this version for native file transfer. Browser Sharing and Wi-Fi Direct remain independent.
+
+Initial limits: up to 100 files per selection and 2 GiB per file. Test on real devices for large files, interrupted transfers, reconnects, and selected-folder mirroring before relying on it for important data.

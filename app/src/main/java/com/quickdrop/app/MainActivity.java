@@ -32,9 +32,13 @@ import java.io.InputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
+import java.util.List;
 import android.widget.TextView;
 import android.widget.ProgressBar;
 import android.widget.Toast;
+import android.widget.ImageView;
+import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.widget.EditText;
 import android.app.AlertDialog;
 
@@ -70,7 +74,9 @@ public class MainActivity extends Activity {
     private boolean panelVisible = false;
     private NativeHotspotController nativeHotspot;
     private TextView nativeStatus, nativeHostDetails;
-    private Button createNativeButton, connectNativeButton, disconnectNativeButton;
+    private Button createNativeButton, connectNativeButton, disconnectNativeButton, nativePickFilesButton, nativeQrButton;
+    private static final int NATIVE_FILE_PICKER = 509;
+    private String nativeQrPayload = "";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -110,11 +116,17 @@ public class MainActivity extends Activity {
         nativeHotspot = new NativeHotspotController(this, new NativeHotspotController.Listener() {
             @Override public void onStatus(String message) { if (nativeStatus != null) nativeStatus.setText(message); }
             @Override public void onHostDetails(String ssid, String password, String address, int port) {
-                if (nativeHostDetails != null) { nativeHostDetails.setText("Hotspot name: " + ssid + "\nPassword: " + (password == null || password.isEmpty() ? "Not required" : password) + "\nSender address: " + address + ":" + port + "\nShare these details with the receiving QuickDrop phone."); nativeHostDetails.setVisibility(View.VISIBLE); }
+                nativeQrPayload = "QDHOTSPOT|2|" + ssid + "|" + (password == null ? "" : password) + "|" + address + "|" + port;
+                if (nativeHostDetails != null) { nativeHostDetails.setText("Hotspot name: " + ssid + "\nPassword: " + (password == null || password.isEmpty() ? "Not required" : password) + "\nSender address: " + address + ":" + port + "\nShow the connection QR code to the receiving phone."); nativeHostDetails.setVisibility(View.VISIBLE); }
+                if (nativeQrButton != null) nativeQrButton.setVisibility(View.VISIBLE);
             }
             @Override public void onConnected(boolean connected, String message) {
                 if (nativeStatus != null) nativeStatus.setText(message);
-                if (disconnectNativeButton != null) disconnectNativeButton.setVisibility(connected ? View.VISIBLE : View.GONE);
+                if (disconnectNativeButton != null) disconnectNativeButton.setVisibility(connected || nativeHostDetails != null && nativeHostDetails.getVisibility() == View.VISIBLE ? View.VISIBLE : View.GONE);
+                if (nativePickFilesButton != null) nativePickFilesButton.setEnabled(connected);
+            }
+            @Override public void onFileReceived(File file) {
+                Toast.makeText(MainActivity.this, "Received: " + file.getName(), Toast.LENGTH_LONG).show();
             }
         });
         refreshUi();
@@ -245,8 +257,12 @@ public class MainActivity extends Activity {
         createNativeButton = button("Create Connection"); LinearLayout.LayoutParams createLp = params(-1, dp(46)); createLp.topMargin = dp(10); nativeCard.addView(createNativeButton, createLp);
         connectNativeButton = button("Connect to Sender"); LinearLayout.LayoutParams connectLp = params(-1, dp(46)); connectLp.topMargin = dp(8); nativeCard.addView(connectNativeButton, connectLp);
         disconnectNativeButton = button("Disconnect"); LinearLayout.LayoutParams disconnectLp = params(-1, dp(42)); disconnectLp.topMargin = dp(8); nativeCard.addView(disconnectNativeButton, disconnectLp); disconnectNativeButton.setVisibility(View.GONE);
+        nativeQrButton = button("Show Connection QR Code"); LinearLayout.LayoutParams qrLp = params(-1, dp(44)); qrLp.topMargin = dp(8); nativeCard.addView(nativeQrButton, qrLp); nativeQrButton.setVisibility(View.GONE);
+        nativePickFilesButton = button("Choose Files to Send"); LinearLayout.LayoutParams nativePickLp = params(-1, dp(46)); nativePickLp.topMargin = dp(8); nativeCard.addView(nativePickFilesButton, nativePickLp); nativePickFilesButton.setEnabled(false);
         createNativeButton.setOnClickListener(v -> requestNativePermissionThenHost());
         connectNativeButton.setOnClickListener(v -> showNativeConnectDialog());
+        nativeQrButton.setOnClickListener(v -> showNativeQrCode());
+        nativePickFilesButton.setOnClickListener(v -> pickNativeFiles());
         disconnectNativeButton.setOnClickListener(v -> { if (nativeHotspot != null) nativeHotspot.disconnect(); if (nativeHostDetails != null) nativeHostDetails.setVisibility(View.GONE); });
 
         errorText = new TextView(this); errorText.setTextColor(0xFFB42318); errorText.setTextSize(12);
@@ -355,6 +371,11 @@ public class MainActivity extends Activity {
             if (list != null) incoming.addAll(list);
         }
         if (incoming.isEmpty()) { Toast.makeText(this, "No shared file was received.", Toast.LENGTH_LONG).show(); return; }
+        if (nativeHotspot != null && nativeHotspot.isConnected()) {
+            nativeHotspot.sendFiles(incoming);
+            Toast.makeText(this, incoming.size() + " file(s) queued for QuickDrop transfer.", Toast.LENGTH_SHORT).show();
+            return;
+        }
         new Thread(() -> {
             File folder = new File(getFilesDir(), "QuickDrop"); if (!folder.exists()) folder.mkdirs();
             int saved = 0;
@@ -417,6 +438,13 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == NATIVE_FILE_PICKER && resultCode == RESULT_OK && data != null) {
+            ArrayList<Uri> selected = new ArrayList<>();
+            if (data.getClipData() != null) { for (int i = 0; i < data.getClipData().getItemCount(); i++) selected.add(data.getClipData().getItemAt(i).getUri()); }
+            else if (data.getData() != null) selected.add(data.getData());
+            if (!selected.isEmpty() && nativeHotspot != null) nativeHotspot.sendFiles(selected);
+            return;
+        }
         if (requestCode == FILE_PICKER) {
             if (fileCallback != null) {
                 Uri[] results = null;
@@ -493,6 +521,26 @@ public class MainActivity extends Activity {
         }
         if (nativeHostDetails != null) { nativeHostDetails.setVisibility(View.VISIBLE); nativeHostDetails.setText("Starting private hotspot…"); }
         if (nativeHotspot != null) nativeHotspot.createConnection();
+    }
+
+    private void pickNativeFiles() {
+        if (nativeHotspot == null || !nativeHotspot.isConnected()) { Toast.makeText(this, "Connect to another QuickDrop phone first.", Toast.LENGTH_SHORT).show(); return; }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType("*/*"); intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try { startActivityForResult(intent, NATIVE_FILE_PICKER); }
+        catch (Exception e) { Toast.makeText(this, "Unable to open file picker.", Toast.LENGTH_SHORT).show(); }
+    }
+
+    private void showNativeQrCode() {
+        if (nativeQrPayload == null || nativeQrPayload.isEmpty()) return;
+        try {
+            com.google.zxing.common.BitMatrix matrix = new com.google.zxing.qrcode.QRCodeWriter().encode(nativeQrPayload, com.google.zxing.BarcodeFormat.QR_CODE, 720, 720);
+            Bitmap bitmap = Bitmap.createBitmap(720, 720, Bitmap.Config.RGB_565);
+            for (int y = 0; y < 720; y++) for (int x = 0; x < 720; x++) bitmap.setPixel(x, y, matrix.get(x, y) ? Color.BLACK : Color.WHITE);
+            ImageView image = new ImageView(this); image.setImageBitmap(bitmap); image.setPadding(dp(12), dp(12), dp(12), dp(12)); image.setAdjustViewBounds(true);
+            new AlertDialog.Builder(this).setTitle("QuickDrop Connection QR").setMessage("Scan this code to read the sender hotspot name and password, then enter them under Connect to Sender.").setView(image).setPositiveButton("Close", (d,w) -> {}).show();
+        } catch (Exception e) { Toast.makeText(this, "Could not generate connection QR code: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
 
     private void showNativeConnectDialog() {
